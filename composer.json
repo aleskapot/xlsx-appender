@@ -1,0 +1,72 @@
+{
+    "name": "aleskapot/xlsx-fast-appender",
+    "description": "Fast, low-memory appending of rows into an existing XLSX sheet (ZipArchive + streaming XMLWriter).",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "xlsx",
+        "excel",
+        "spreadsheet",
+        "append",
+        "streaming",
+        "low-memory"
+    ],
+    "authors": [
+        {
+            "name": "aleskapot"
+        }
+    ],
+    "require": {
+        "php": ">=8.2",
+        "ext-dom": "*",
+        "ext-mbstring": "*",
+        "ext-xml": "*",
+        "ext-xmlreader": "*",
+        "ext-xmlwriter": "*",
+        "ext-zip": "*"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.64",
+        "orchestra/testbench": "^9.0 || ^10.0",
+        "phpoffice/phpspreadsheet": "^2.1",
+        "phpstan/phpstan": "^2.1",
+        "phpstan/phpstan-phpunit": "^2.0",
+        "phpstan/phpstan-strict-rules": "^2.0",
+        "phpunit/phpunit": "^11.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "XlsxFastAppender\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "XlsxFastAppender\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "XlsxFastAppender\\Laravel\\XlsxFastAppenderServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test:coverage": "phpunit --path-coverage --coverage-text --exclude-group memory",
+        "stan": "phpstan analyse --no-progress",
+        "cs": "php-cs-fixer fix --dry-run --diff",
+        "cs:fix": "php-cs-fixer fix",
+        "check": [
+            "@cs",
+            "@stan",
+            "@test"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "preferred-install": "dist"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
