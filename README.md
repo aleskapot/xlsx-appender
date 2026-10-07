@@ -145,7 +145,33 @@ records align correctly. Objects (including Eloquent models) are read via
 
 ## Laravel
 
-The service provider is auto-discovered (Laravel >= 5.5):
+### Installation
+
+```bash
+composer require aleskapot/xlsx-fast-appender
+```
+
+The service provider is auto-discovered (Laravel >= 5.5) through
+`extra.laravel.providers` in `composer.json` — nothing else to register. With
+package discovery disabled (`"dont-discover"` or Lumen), add it manually:
+
+```php
+// bootstrap/providers.php (Laravel >= 11)
+return [
+    // ...
+    XlsxFastAppender\Laravel\XlsxFastAppenderServiceProvider::class,
+];
+
+// config/app.php (Laravel <= 10)
+'providers' => [
+    // ...
+    XlsxFastAppender\Laravel\XlsxFastAppenderServiceProvider::class,
+],
+```
+
+No facade alias is registered — import the facade by its full class name.
+
+### Usage
 
 ```php
 use XlsxFastAppender\Laravel\Facades\XlsxAppender;
@@ -155,6 +181,20 @@ $written = XlsxAppender::append('/data/report.xlsx', $rows, [
     'start_cell' => 'A2',
 ]);
 ```
+
+`append()` is a shortcut for `make(...)->append(...)`; build a configured
+instance when you need more than one batch:
+
+```php
+$appender = XlsxAppender::make('/data/report.xlsx', [
+    'columns'      => ['name' => 'Name', 'amount' => 'Amount'],
+    'write_header' => true,
+]);
+
+$appender->append(Report::query()->lazy(500));   // streams from Eloquent
+```
+
+### Configuration
 
 Defaults come from the published config (`start_cell=A2`, `conflict_mode=error`,
 `mode=inline_str`, `use_lock=true`, …):
