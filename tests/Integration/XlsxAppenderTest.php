@@ -131,6 +131,125 @@ final class XlsxAppenderTest extends TestCase
         self::assertStringContainsString('<row r="11">', $this->readEntry($path, self::SHEET_ENTRY));
     }
 
+    public function testConflictModeClearRemovesRowsFromStartRowToTheEnd(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([
+            ['1'], ['2'], ['3'], ['4'], ['5'],
+        ])]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A3',
+            'conflict_mode' => 'clear',
+        ]))->append([['x'], ['y']]);
+
+        self::assertSame(2, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertSame(['1', '2', '3', '4'], $this->rowNumbers($sheet));
+        self::assertStringContainsString('<t>1</t>', $sheet);
+        self::assertStringNotContainsString('<t>5</t>', $sheet);
+        self::assertStringContainsString('<t>x</t>', $sheet);
+        self::assertStringContainsString('<t>y</t>', $sheet);
+        self::assertStringContainsString('ref="A1:A4"', $sheet);
+        self::assertFileDoesNotExist($path.'.tmp');
+        self::assertFileDoesNotExist($path.'.tmp.rows');
+    }
+
+    public function testConflictModeClearBelowExistingDataActsLikeAppend(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['1'], ['2']])]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A3',
+            'conflict_mode' => 'clear',
+        ]))->append([['x']]);
+
+        self::assertSame(1, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertSame(['1', '2', '3'], $this->rowNumbers($sheet));
+        self::assertStringContainsString('<t>1</t>', $sheet);
+        self::assertStringContainsString('ref="A1:A3"', $sheet);
+    }
+
+    public function testConflictModeClearWithNoRecordsLeavesFileByteIdentical(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['1'], ['2'], ['3']])]);
+        $before = file_get_contents($path);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A2',
+            'conflict_mode' => 'clear',
+        ]))->append([]);
+
+        self::assertSame(0, $written);
+        self::assertSame($before, file_get_contents($path));
+        self::assertFileDoesNotExist($path.'.tmp');
+    }
+
+    public function testConflictModeOverwriteReplacesCoveredRowsAndKeepsTheRest(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([
+            ['1'], ['2'], ['3'], ['4'], ['5'],
+        ])]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A3',
+            'conflict_mode' => 'overwrite',
+        ]))->append([['x']]);
+
+        self::assertSame(1, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertSame(['1', '2', '3', '4', '5'], $this->rowNumbers($sheet));
+        self::assertStringNotContainsString('<t>3</t>', $sheet);
+        self::assertStringContainsString('<t>x</t>', $sheet);
+        self::assertStringContainsString('<t>4</t>', $sheet);
+        self::assertStringContainsString('<t>5</t>', $sheet);
+        self::assertStringContainsString('ref="A1:A5"', $sheet);
+        self::assertFileDoesNotExist($path.'.tmp');
+    }
+
+    public function testConflictModeOverwriteExtendsPastExistingData(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['1'], ['2'], ['3']])]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A2',
+            'conflict_mode' => 'overwrite',
+        ]))->append([['a'], ['b'], ['c'], ['d']]);
+
+        self::assertSame(4, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertSame(['1', '2', '3', '4', '5'], $this->rowNumbers($sheet));
+        self::assertStringContainsString('<t>1</t>', $sheet);
+        self::assertStringContainsString('<t>d</t>', $sheet);
+        self::assertStringContainsString('ref="A1:A5"', $sheet);
+    }
+
+    public function testConflictModeOverwriteInsideARowGapKeepsLaterRows(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::wrapWorksheet(
+            '<row r="1"><c r="A1" t="inlineStr"><is><t>1</t></is></c></row>'
+            .'<row r="2"><c r="A2" t="inlineStr"><is><t>2</t></is></c></row>'
+            .'<row r="10"><c r="A10" t="inlineStr"><is><t>10</t></is></c></row>',
+            '<dimension ref="A1:A10"/>',
+        )]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A6',
+            'conflict_mode' => 'overwrite',
+        ]))->append([['x']]);
+
+        self::assertSame(1, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertSame(['1', '2', '6', '10'], $this->rowNumbers($sheet));
+        self::assertStringContainsString('<t>10</t>', $sheet);
+        self::assertStringContainsString('ref="A1:A10"', $sheet);
+    }
+
     public function testEmptyIterableReturnsZeroAndKeepsFileUntouched(): void
     {
         $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['keep']])]);
@@ -635,6 +754,8 @@ final class XlsxAppenderTest extends TestCase
     {
         yield 'sheet not a string' => [['sheet' => 42], 'Option "sheet"'];
         yield 'start_cell not a string' => [['start_cell' => 1], 'Option "start_cell"'];
+        yield 'conflict_mode unknown' => [['conflict_mode' => 'wipe'], 'Option "conflict_mode"'];
+        yield 'conflict_mode not a string' => [['conflict_mode' => 1], 'Option "conflict_mode"'];
         yield 'mode unknown' => [['mode' => 'fast'], 'Option "mode"'];
         yield 'size not an int' => [['max_sheet_xml_size' => '1mb'], 'Option "max_sheet_xml_size"'];
         yield 'size not positive' => [['max_sheet_xml_size' => 0], 'Option "max_sheet_xml_size"'];
@@ -957,5 +1078,15 @@ final class XlsxAppenderTest extends TestCase
         }
 
         return $contents;
+    }
+
+    /**
+     * @return list<string> row numbers in document order
+     */
+    private function rowNumbers(string $sheet): array
+    {
+        preg_match_all('/<row\b[^>]*\br="(\d+)"/', $sheet, $matches);
+
+        return $matches[1];
     }
 }

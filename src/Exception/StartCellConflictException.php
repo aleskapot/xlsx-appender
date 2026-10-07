@@ -7,6 +7,9 @@ namespace XlsxFastAppender\Exception;
 /**
  * The requested start cell lies inside or above existing data (C2, C3):
  * rows can only be appended below the last existing row.
+ *
+ * Thrown only with conflict_mode="error"; the "clear" and "overwrite"
+ * conflict modes rewrite the existing rows instead.
  */
 final class StartCellConflictException extends AppenderException
 {

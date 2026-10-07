@@ -30,6 +30,7 @@ final class XlsxAppender
     private const KNOWN_OPTIONS = [
         'sheet',
         'start_cell',
+        'conflict_mode',
         'mode',
         'max_sheet_xml_size',
         'use_lock',
@@ -55,6 +56,8 @@ final class XlsxAppender
     private readonly ?string $sheet;
 
     private readonly CellAddress $startCell;
+
+    private readonly string $conflictMode;
 
     private readonly int $maxSheetXmlSize;
 
@@ -120,6 +123,17 @@ final class XlsxAppender
         }
 
         $this->startCell = CellAddress::parse($startCell);
+
+        $conflictMode = $options['conflict_mode'] ?? 'error';
+
+        if ($conflictMode !== 'error' && $conflictMode !== 'clear' && $conflictMode !== 'overwrite') {
+            throw new InvalidOptionException(\sprintf(
+                'Option "conflict_mode" must be "error", "clear" or "overwrite", got %s.',
+                \is_string($conflictMode) ? '"'.$conflictMode.'"' : get_debug_type($conflictMode),
+            ));
+        }
+
+        $this->conflictMode = $conflictMode;
 
         $mode = $options['mode'] ?? 'inline_str';
 
@@ -329,7 +343,7 @@ final class XlsxAppender
 
         $startRow = $this->startCell->row;
 
-        if ($startRow <= $scan->lastRow) {
+        if ($this->conflictMode === 'error' && $startRow <= $scan->lastRow) {
             throw new StartCellConflictException(\sprintf(
                 'start_cell %s points at row %d, but "%s" already contains data up to row %d; '
                 .'rows can only be appended below the last existing row (C2/C3). '
@@ -397,6 +411,7 @@ final class XlsxAppender
             $records,
             $this->mapper,
             $headerLabels,
+            $this->conflictMode,
         );
     }
 

@@ -18,6 +18,10 @@ use XlsxFastAppender\Exception\WriteFailedException;
  * 4. the assembled file is verified by re-scanning it (row count and
  *    well-formedness) before it may enter the zip.
  *
+ * With conflict_mode "clear" / "overwrite" the existing rows are re-bucketed
+ * first (SheetRowPartitioner): rows the rewrite drops are removed, kept rows
+ * keep their bytes and land around the inserted block in ascending order.
+ *
  * On any failure both temp files are removed and the exception is rethrown:
  * the caller's file is never touched.
  */
@@ -33,6 +37,10 @@ final class SheetSplicer
      * @param iterable<mixed>   $records          raw records, mapped by $mapper per row
      * @param list<string>|null $headerLabels     header row at startRow − 1, or null
      * @param int               $previousRowCount rows already present in <sheetData>
+     * @param string            $conflictMode     "error" appends below the data as-is;
+     *                                            "clear" drops every row from startRow to the
+     *                                            end of the sheet, "overwrite" drops only the
+     *                                            rows the new block covers
      *
      * @throws InvalidWorkbookException when the sheet XML has no `</sheetData>` (C14)
      * @throws WriteFailedException     when a temp file cannot be written (C13)
@@ -45,6 +53,7 @@ final class SheetSplicer
         iterable $records,
         ColumnMapper $mapper,
         ?array $headerLabels = null,
+        string $conflictMode = 'error',
     ): SpliceResult {
         $rowsPath = $tmpPath.'.rows';
         $directory = \dirname($rowsPath);
@@ -58,7 +67,7 @@ final class SheetSplicer
         }
 
         try {
-            $result = $this->writeRows(
+            [$result, $dropped] = $this->writeRows(
                 $sheetXml,
                 $rowsPath,
                 $tmpPath,
@@ -66,6 +75,7 @@ final class SheetSplicer
                 $records,
                 $mapper,
                 $headerLabels,
+                $conflictMode,
             );
 
             if ($result->isEmpty()) {
@@ -74,7 +84,7 @@ final class SheetSplicer
                 return $result;
             }
 
-            $this->verify($tmpPath, $result, $previousRowCount);
+            $this->verify($tmpPath, $result, $previousRowCount, $dropped);
 
             return $result;
         } catch (\Throwable $exception) {
@@ -89,10 +99,16 @@ final class SheetSplicer
      * Re-scans an assembled sheet file and asserts its row count matches the
      * expectation (specification step 9, run before the file enters the zip).
      *
+     * @param int $droppedRowCount rows removed by the "clear" / "overwrite" rewrite
+     *
      * @throws InvalidWorkbookException when the file is malformed or has the wrong row count
      */
-    public function verify(string $tmpPath, SpliceResult $expected, int $previousRowCount): void
-    {
+    public function verify(
+        string $tmpPath,
+        SpliceResult $expected,
+        int $previousRowCount,
+        int $droppedRowCount = 0,
+    ): void {
         $reader = \XMLReader::open($tmpPath);
 
         if (!$reader instanceof \XMLReader) {
@@ -100,7 +116,9 @@ final class SheetSplicer
         }
 
         $result = SheetDataScanner::scanReader($reader, $tmpPath);
-        $expectedRows = $previousRowCount + $expected->rowsWritten + ($expected->headerWritten ? 1 : 0);
+        $expectedRows = $previousRowCount - $droppedRowCount
+            + $expected->rowsWritten
+            + ($expected->headerWritten ? 1 : 0);
 
         if ($result->rowCount !== $expectedRows) {
             throw new InvalidWorkbookException(\sprintf(
@@ -115,6 +133,9 @@ final class SheetSplicer
     /**
      * @param iterable<mixed>   $records
      * @param list<string>|null $headerLabels
+     *
+     * @return array{SpliceResult, int} splice result and the number of
+     *                                  existing rows dropped by the rewrite
      */
     private function writeRows(
         string $sheetXml,
@@ -124,7 +145,8 @@ final class SheetSplicer
         iterable $records,
         ColumnMapper $mapper,
         ?array $headerLabels,
-    ): SpliceResult {
+        string $conflictMode,
+    ): array {
         $split = $this->splitSheetData($sheetXml);
 
         $rows = 0;
@@ -165,16 +187,57 @@ final class SheetSplicer
         if ($rows === 0 && !$headerWritten) {
             $this->removeFile($rowsPath);
 
-            return new SpliceResult(0, false);
+            return [new SpliceResult(0, false), 0];
         }
 
         $maxRow = $headerWritten && $rows === 0 ? $startRow - 1 : $startRow + $rows - 1;
-        $prefix = $this->applyDimension($split[0], $minRow, $maxRow, $maxColumn);
+        $dropped = 0;
 
-        $this->assemble($prefix, $rowsPath, $split[1], $tmpPath);
+        if ($conflictMode === 'clear' || $conflictMode === 'overwrite') {
+            [$head, $body] = $this->splitSheetHead($split[0]);
+            $lastReplacedRow = $conflictMode === 'clear' ? null : $startRow + $rows - 1;
+            $partition = SheetRowPartitioner::partition($body, $startRow, $lastReplacedRow);
+            $dropped = $partition['dropped'];
+            $prefix = $this->applyDimension(
+                $head.$partition['before'],
+                $minRow,
+                max($partition['keptMaxRow'], $maxRow),
+                $maxColumn,
+                false,
+            );
+            $suffix = $partition['after'].$split[1];
+        } else {
+            $prefix = $this->applyDimension($split[0], $minRow, $maxRow, $maxColumn);
+            $suffix = $split[1];
+        }
+
+        $this->assemble($prefix, $rowsPath, $suffix, $tmpPath);
         $this->removeFile($rowsPath);
 
-        return new SpliceResult($rows, $headerWritten);
+        return [new SpliceResult($rows, $headerWritten), $dropped];
+    }
+
+    /**
+     * Splits the prefix produced by splitSheetData() into the worksheet
+     * header (everything up to and including the <sheetData> open tag) and
+     * the body that holds the existing rows.
+     *
+     *
+     * @throws InvalidWorkbookException when the opening tag is missing (C14)
+     *
+     * @return array{string, string} <sheetData> open tag and the rows inside it
+     */
+    private function splitSheetHead(string $prefix): array
+    {
+        if (preg_match('/<sheetData\b[^>]*>/', $prefix, $match, \PREG_OFFSET_CAPTURE) !== 1) {
+            throw new InvalidWorkbookException(
+                'The worksheet XML has no opening <sheetData> tag; the file is not a usable worksheet (C14).',
+            );
+        }
+
+        $end = $match[0][1] + \strlen($match[0][0]);
+
+        return [substr($prefix, 0, $end), substr($prefix, $end)];
     }
 
     /**
@@ -275,9 +338,19 @@ final class SheetSplicer
     /**
      * Rewrites the `<dimension ref>` of the sheet header so it covers both the
      * previous extent (when the old ref is parseable) and the new block.
+     *
+     * @param bool $keepOldMaxRow merge the old bottom row as well; false for the
+     *                            "clear" / "overwrite" modes, where rows below the
+     *                            kept ones no longer exist and the exact kept
+     *                            maximum is already known
      */
-    private function applyDimension(string $prefix, int $minRow, int $maxRow, int $maxColumn): string
-    {
+    private function applyDimension(
+        string $prefix,
+        int $minRow,
+        int $maxRow,
+        int $maxColumn,
+        bool $keepOldMaxRow = true,
+    ): string {
         if ($maxColumn === 0) {
             return $prefix;
         }
@@ -294,7 +367,10 @@ final class SheetSplicer
             $bounds['minCol'] = min($old['minCol'], $bounds['minCol']);
             $bounds['minRow'] = min($old['minRow'], $bounds['minRow']);
             $bounds['maxCol'] = max($old['maxCol'], $bounds['maxCol']);
-            $bounds['maxRow'] = max($old['maxRow'], $bounds['maxRow']);
+
+            if ($keepOldMaxRow) {
+                $bounds['maxRow'] = max($old['maxRow'], $bounds['maxRow']);
+            }
         }
 
         return preg_replace_callback(

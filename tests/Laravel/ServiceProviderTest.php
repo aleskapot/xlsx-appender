@@ -29,6 +29,7 @@ final class ServiceProviderTest extends LaravelTestCase
         self::assertIsArray($config);
         self::assertNull($config['sheet']);
         self::assertSame('A2', $config['start_cell']);
+        self::assertSame('error', $config['conflict_mode']);
         self::assertSame('inline_str', $config['mode']);
         self::assertSame(268435456, $config['max_sheet_xml_size']);
         self::assertTrue($config['use_lock']);

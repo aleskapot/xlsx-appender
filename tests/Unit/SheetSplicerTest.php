@@ -310,6 +310,89 @@ final class SheetSplicerTest extends TestCase
         self::assertStringNotContainsString('XFE', $content);
     }
 
+    public function testClearModeDropsExistingRowsFromStartRowToTheEnd(): void
+    {
+        $original = XlsxFixtureFactory::worksheet([['1'], ['2'], ['3'], ['4'], ['5']]);
+        $tmp = $this->tempFilePath();
+
+        $result = $this->splicer()->splice(
+            $original,
+            $tmp,
+            2,
+            5,
+            [['x'], ['y']],
+            new ColumnMapper(null),
+            null,
+            'clear',
+        );
+
+        self::assertSame(2, $result->rowsWritten);
+
+        $content = file_get_contents($tmp);
+        self::assertIsString($content);
+        preg_match_all('/<row\b[^>]*\br="(\d+)"/', $content, $matches);
+        self::assertSame(['1', '2', '3'], $matches[1]);
+        self::assertStringContainsString('<t>1</t>', $content);
+        self::assertStringNotContainsString('<t>5</t>', $content);
+        self::assertStringContainsString('<t>x</t>', $content);
+        self::assertStringContainsString('ref="A1:A3"', $content);
+        self::assertStringNotContainsString('ref="A1:A5"', $content);
+        self::assertFileDoesNotExist($tmp.'.rows');
+    }
+
+    public function testOverwriteModeReplacesCoveredRowsAndKeepsTheRest(): void
+    {
+        $original = XlsxFixtureFactory::worksheet([['1'], ['2'], ['3']]);
+        $tmp = $this->tempFilePath();
+
+        $result = $this->splicer()->splice(
+            $original,
+            $tmp,
+            2,
+            3,
+            [['a'], ['b'], ['c'], ['d']],
+            new ColumnMapper(null),
+            null,
+            'overwrite',
+        );
+
+        self::assertSame(4, $result->rowsWritten);
+
+        $content = file_get_contents($tmp);
+        self::assertIsString($content);
+        preg_match_all('/<row\b[^>]*\br="(\d+)"/', $content, $matches);
+        self::assertSame(['1', '2', '3', '4', '5'], $matches[1]);
+        self::assertStringContainsString('<t>1</t>', $content);
+        self::assertStringNotContainsString('<t>2</t>', $content);
+        self::assertStringContainsString('<t>d</t>', $content);
+        self::assertStringContainsString('ref="A1:A5"', $content);
+        self::assertStringNotContainsString('ref="A1:A3"', $content);
+    }
+
+    public function testConflictModeRejectsPrefixWithoutOpeningSheetDataTag(): void
+    {
+        $tmp = $this->tempFilePath();
+
+        try {
+            $this->splicer()->splice(
+                '<worksheet><dimension ref="A1:A1"/></sheetData>',
+                $tmp,
+                1,
+                1,
+                [['x']],
+                new ColumnMapper(null),
+                null,
+                'clear',
+            );
+            self::fail('Expected InvalidWorkbookException.');
+        } catch (InvalidWorkbookException $exception) {
+            self::assertStringContainsString('opening <sheetData>', $exception->getMessage());
+        }
+
+        self::assertFileDoesNotExist($tmp);
+        self::assertFileDoesNotExist($tmp.'.rows');
+    }
+
     public function testRejectsWhenTheTemporaryDirectoryIsNotWritable(): void
     {
         $directory = sys_get_temp_dir().'/xla_sp_'.bin2hex(random_bytes(4));

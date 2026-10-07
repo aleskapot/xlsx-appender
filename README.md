@@ -67,7 +67,8 @@ need a `start_cell` below existing data:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `sheet` | `string\|null` | `null` | Sheet name; `null` selects the first sheet. Unknown name → `SheetNotFoundException` with the list of available names. |
-| `start_cell` | `string` | `'A1'` | Top-left cell for the first data row (e.g. `'A2'` under a header row). Must not intersect existing rows (C2). |
+| `start_cell` | `string` | `'A1'` | Top-left cell for the first data row (e.g. `'A2'` under a header row). Must not intersect existing rows (C2) unless `conflict_mode` says otherwise. |
+| `conflict_mode` | `string` | `'error'` | What to do when `start_cell` points into existing rows: `'error'` throws `StartCellConflictException`, `'clear'` drops every row from `start_cell` to the end of the sheet, `'overwrite'` replaces only the rows the new batch covers. |
 | `mode` | `string` | `'inline_str'` | `'inline_str'` (strings embedded in cells) or `'shared_strings'` (shared `xl/sharedStrings.xml`, deduplicated). |
 | `max_sheet_xml_size` | `int` | `268435456` (256 MiB) | Upper bound for the worksheet XML part read into memory (C11). |
 | `use_lock` | `bool` | `true` | Serialise writers through a sidecar `<file>.lock` with `flock` (C12). |
@@ -79,6 +80,35 @@ need a `start_cell` below existing data:
 
 Unknown options and type violations throw `InvalidOptionException` at
 construction time.
+
+### Conflict modes
+
+By default a `start_cell` that points into existing rows throws
+`StartCellConflictException` — rows can only be appended below the last
+existing row. `conflict_mode` selects two rewrite behaviours instead:
+
+- `'clear'` — delete every existing row from `start_cell`'s row to the end of
+  the sheet, then write the new batch there. Rows above `start_cell` are kept:
+
+  ```php
+  // sheet has rows 1..500; rows 1..9 stay, rows 10..500 are dropped,
+  // then the batch is written at row 10:
+  (new XlsxAppender($path, [
+      'start_cell'    => 'A10',
+      'conflict_mode' => 'clear',
+  ]))->append($rows);
+  ```
+
+- `'overwrite'` — write the batch over the rows it covers and keep everything
+  else: rows above `start_cell` are untouched, and rows below the last written
+  row survive even when the new batch is shorter than the old block.
+
+Both modes rewrite whole rows (cells left of `start_cell` in a replaced row go
+away with it), keep the surrounding rows byte-identical and in ascending row
+order, and are a no-op when the batch is empty — `append([])` returns `0`
+without touching the file. Elements outside `<sheetData>` that reference
+dropped rows (merged cells, conditional formatting ranges) are left as-is.
+`write_header` still requires an empty sheet (C23), independent of the mode.
 
 ### Header mapping
 
@@ -126,8 +156,8 @@ $written = XlsxAppender::append('/data/report.xlsx', $rows, [
 ]);
 ```
 
-Defaults come from the published config (`start_cell=A2`, `mode=inline_str`,
-`use_lock=true`, …):
+Defaults come from the published config (`start_cell=A2`, `conflict_mode=error`,
+`mode=inline_str`, `use_lock=true`, …):
 
 ```bash
 php artisan vendor:publish --tag=xlsx-appender
@@ -183,7 +213,7 @@ All exceptions extend `XlsxFastAppender\Exception\AppenderException`.
 |-----------|------|
 | `InvalidOptionException` | Unknown/invalid option, or invalid container `path`/`options` binding parameters. |
 | `InvalidCellReferenceException` | `start_cell` unparseable or out of Excel limits (C18); column overflow (C26); `write_header` at row 1 (C22). |
-| `StartCellConflictException` | `start_cell` intersects existing rows or a row gap (C2, C3). |
+| `StartCellConflictException` | `start_cell` intersects existing rows or a row gap (C2, C3); only with `conflict_mode='error'` — `'clear'`/`'overwrite'` rewrite instead. |
 | `HeaderConflictException` | `write_header` on a sheet that already has rows (C23). |
 | `SheetNotFoundException` | Sheet name not found; carries `availableSheets` (C5). |
 | `InvalidWorkbookException` | Not a valid XLSX: missing/malformed workbook, rels, worksheet, or `sharedStrings.xml` (C14). |
@@ -262,7 +292,7 @@ composer check          # cs-fixer (dry-run) + phpstan (max, strict) + phpunit
 composer test:coverage  # with coverage (xdebug)
 ```
 
-27 corner cases (C1–C27) and the full matrix are tracked in
+29 corner cases (C1–C29) and the full matrix are tracked in
 `tests/coverage-matrix.md`.
 
 ## License

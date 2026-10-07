@@ -1,4 +1,4 @@
-# Coverage matrix: corner cases C1–C27 → tests
+# Coverage matrix: corner cases C1–C29 → tests
 
 Status legend: **done** — automated test exists and passes; **partial** — one side covered,
 the other arrives with the stage noted; **planned** — not yet implemented (stage per spec §5).
@@ -37,6 +37,8 @@ docs/CI release.
 | C25 | Positional arity ≠ W with `columns` | done | `Unit/ColumnMapperTest::testPositionalRecordMustMatchColumnCount`, `Integration/XlsxAppenderTest::testPositionalArityMismatchThrows` |
 | C26 | `start_col + W − 1 > 16384` | done | `Integration/XlsxAppenderTest::testColumnWidthOverflowThrows`, `Unit/RowXmlGeneratorTest::testRejectsColumnBeyondXfd`, `::testAcceptsCellValueAtLastColumn` |
 | C27 | Cyrillic labels in header, UTF-8, reopen in Excel/LO/GS | done (automated) | header emission through `Unit/SheetSplicerTest::testWritesHeaderRowBeforeData` + header integration tests (UTF-8 bytes asserted); Excel/LO/GS reopen → pre-release manual |
+| C28 | `conflict_mode='clear'` — rows from `start_cell` to the end of the sheet are dropped before the write | done | `Integration/XlsxAppenderTest::testConflictModeClearRemovesRowsFromStartRowToTheEnd` (rows 1..5 → 1,2 + new 3,4, dimension `A1:A4`), `::testConflictModeClearBelowExistingDataActsLikeAppend` (nothing to drop), `::testConflictModeClearWithNoRecordsLeavesFileByteIdentical` (empty batch no-op); rewrite plumbing `Unit/SheetSplicerTest::testClearModeDropsExistingRowsFromStartRowToTheEnd`, `testConflictModeRejectsPrefixWithoutOpeningSheetDataTag`; partitioning `Unit/SheetRowPartitionerTest`; option validation in `invalidOptionProvider` (`conflict_mode`) |
+| C29 | `conflict_mode='overwrite'` — only the rows covered by the batch are replaced, rows above/below survive | done | `Integration/XlsxAppenderTest::testConflictModeOverwriteReplacesCoveredRowsAndKeepsTheRest`, `::testConflictModeOverwriteExtendsPastExistingData`, `::testConflictModeOverwriteInsideARowGapKeepsLaterRows` (gap start now legal, ascending `r` order asserted); `Unit/SheetSplicerTest::testOverwriteModeReplacesCoveredRowsAndKeepsTheRest`; partitioning `Unit/SheetRowPartitionerTest` |
 
 ## Structural test inventory
 
@@ -46,10 +48,11 @@ docs/CI release.
 - `Unit/SheetNotFoundExceptionTest` — message and `availableSheets` (C5).
 - `Unit/RowXmlGeneratorTest` — cell emission, value validation, float/string encoding (C8, C9, C15, C16, C26).
 - `Unit/ColumnMapperTest` — `columns` forms, recordMap, strict mode, object records (C24, C25).
-- `Unit/SheetSplicerTest` — row insertion, header rows, dimension merge, temp-file lifecycle, verify() (C1, C13, C14 write side).
+- `Unit/SheetSplicerTest` — row insertion, header rows, dimension merge, temp-file lifecycle, verify(), clear/overwrite rewrite plumbing (C1, C13, C14 write side, C28, C29).
+- `Unit/SheetRowPartitionerTest` — row bucketing for the rewrite: clear/overwrite ranges, missing `r`, self-closed rows, whitespace, missing `</row>` (C28, C29).
 - `Unit/SharedStringsStoreTest` — sst parse/dedup/index allocation, count refresh, self-closed part, CT/rel registrations, malformed parts (C6, C7); declares `SharedStringsStore`.
 - `Integration/WorkbookInspectorTest` — workbook resolution, quirks, invalid files (C4, C5, C11, C14, C17), `readSharedStrings()` size limit/read failures; declares `SheetDataScanner`.
-- `Integration/XlsxAppenderTest` — end-to-end append contract: conflicts, header modes, validation order, atomicity (C1–C3, C8–C11, C13, C15–C16, C19, C21–C27); `shared_strings` mode wiring (C6, C7); sidecar locking lifecycle and `use_lock=false` (C12); >4 GB fast-fail (C20).
+- `Integration/XlsxAppenderTest` — end-to-end append contract: conflicts, header modes, validation order, atomicity (C1–C3, C8–C11, C13, C15–C16, C19, C21–C29); `shared_strings` mode wiring (C6, C7); sidecar locking lifecycle and `use_lock=false` (C12); >4 GB fast-fail (C20).
 - `Laravel/ServiceProviderTest` — config defaults per spec §3.3, non-singleton container bindings, `path`/`options` parameter validation, config narrowing (non-array and integer-keyed configs), `vendor:publish --tag=xlsx-appender` path registration; declares `XlsxFastAppenderServiceProvider`.
 - `Laravel/FacadeTest` — facade `append()`/`make()`, per-call overrides (`sheet`, `start_cell`), Eloquent collection mapped by `getAttribute`, `LazyCollection` streaming, chunked batch appends (stage-5 exit criteria); exercises `AppenderFactory`.
 - `Support/InteractsWithTempFiles` — temp-file/ZipArchive lifecycle trait shared by the PHPUnit `TestCase` and the Testbench `LaravelTestCase`.
@@ -58,7 +61,7 @@ docs/CI release.
 
 ## Known intentionally-uncovered statements
 
-Fifteen defensive statements stay uncovered — each is a system-failure branch whose
+Sixteen defensive statements stay uncovered — each is a system-failure branch whose
 preconditions are checked earlier or unobservable from userland:
 
 - `RowXmlGenerator::floatToPlainDecimal()` — `json_encode() === false` for a float (never happens
@@ -66,6 +69,7 @@ preconditions are checked earlier or unobservable from userland:
   `json_encode()` only emits `e+N` for magnitudes where that branch is arithmetically unreachable;
   verified by probe).
 - `SheetDataScanner` — the empty `private` constructor of a static utility class (never instantiated).
+- `SheetRowPartitioner` — the same empty `private` constructor of a static utility class.
 - `SheetSplicer` — `fopen()`/`fwrite()`/`fread()` failure throws; the unwritable-directory case is
   covered first (`testRejectsWhenTheTemporaryDirectoryIsNotWritable`), the rest are OS-level
   failures with no stable way to provoke them in CI.

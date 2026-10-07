@@ -11,6 +11,7 @@ declare(strict_types=1);
 return [
     'sheet' => null,
     'start_cell' => 'A2',
+    'conflict_mode' => 'error',
     'mode' => 'inline_str',
     'max_sheet_xml_size' => 268435456,
     'use_lock' => true,
