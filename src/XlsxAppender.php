@@ -57,7 +57,7 @@ final class XlsxAppender
 
     private readonly CellAddress $startCell;
 
-    private readonly string $conflictMode;
+    private readonly ConflictMode $conflictMode;
 
     private readonly int $maxSheetXmlSize;
 
@@ -72,7 +72,7 @@ final class XlsxAppender
 
     private readonly bool $strictColumns;
 
-    private readonly string $mode;
+    private readonly StringMode $mode;
 
     private readonly bool $useLock;
 
@@ -124,27 +124,17 @@ final class XlsxAppender
 
         $this->startCell = CellAddress::parse($startCell);
 
-        $conflictMode = $options['conflict_mode'] ?? 'error';
+        $this->conflictMode = self::resolveEnumOption(
+            $options['conflict_mode'] ?? ConflictMode::Error,
+            'conflict_mode',
+            ConflictMode::class,
+        );
 
-        if ($conflictMode !== 'error' && $conflictMode !== 'clear' && $conflictMode !== 'overwrite') {
-            throw new InvalidOptionException(\sprintf(
-                'Option "conflict_mode" must be "error", "clear" or "overwrite", got %s.',
-                \is_string($conflictMode) ? '"'.$conflictMode.'"' : get_debug_type($conflictMode),
-            ));
-        }
-
-        $this->conflictMode = $conflictMode;
-
-        $mode = $options['mode'] ?? 'inline_str';
-
-        if ($mode !== 'inline_str' && $mode !== 'shared_strings') {
-            throw new InvalidOptionException(\sprintf(
-                'Option "mode" must be "inline_str" or "shared_strings", got %s.',
-                \is_string($mode) ? '"'.$mode.'"' : get_debug_type($mode),
-            ));
-        }
-
-        $this->mode = $mode;
+        $this->mode = self::resolveEnumOption(
+            $options['mode'] ?? StringMode::InlineStr,
+            'mode',
+            StringMode::class,
+        );
 
         $maxSize = $options['max_sheet_xml_size'] ?? self::DEFAULT_MAX_SHEET_XML_SIZE;
 
@@ -223,6 +213,47 @@ final class XlsxAppender
         $this->strictColumns = $strictColumns;
 
         $this->mapper = new ColumnMapper($columns, $strictColumns, null);
+    }
+
+    /**
+     * Resolves an option that accepts a backed-enum case or its string value:
+     * `conflict_mode` (`ConflictMode::Clear` / `"clear"`) and `mode`
+     * (`StringMode::SharedStrings` / `"shared_strings"`).
+     *
+     * @template T of \BackedEnum
+     *
+     * @param class-string<T> $enum
+     *
+     * @throws InvalidOptionException when the value is neither a $enum case nor one of its backed values
+     *
+     * @return T
+     */
+    private static function resolveEnumOption(mixed $value, string $option, string $enum): \BackedEnum
+    {
+        if ($value instanceof $enum) {
+            return $value;
+        }
+
+        if (\is_string($value)) {
+            $case = $enum::tryFrom($value);
+
+            if ($case !== null) {
+                return $case;
+            }
+        }
+
+        $allowed = implode(', ', array_map(
+            static fn (\BackedEnum $case): string => '"'.$case->value.'"',
+            $enum::cases(),
+        ));
+
+        throw new InvalidOptionException(\sprintf(
+            'Option "%s" must be one of %s (plain string or %s case), got %s.',
+            $option,
+            $allowed,
+            $enum,
+            \is_string($value) ? '"'.$value.'"' : get_debug_type($value),
+        ));
     }
 
     /**
@@ -343,7 +374,7 @@ final class XlsxAppender
 
         $startRow = $this->startCell->row;
 
-        if ($this->conflictMode === 'error' && $startRow <= $scan->lastRow) {
+        if ($this->conflictMode === ConflictMode::Error && $startRow <= $scan->lastRow) {
             throw new StartCellConflictException(\sprintf(
                 'start_cell %s points at row %d, but "%s" already contains data up to row %d; '
                 .'rows can only be appended below the last existing row (C2/C3). '
@@ -411,7 +442,7 @@ final class XlsxAppender
             $records,
             $this->mapper,
             $headerLabels,
-            $this->conflictMode,
+            $this->conflictMode->value,
         );
     }
 
@@ -421,7 +452,7 @@ final class XlsxAppender
      */
     private function loadSharedStrings(WorkbookInspector $inspector): ?SharedStringsStore
     {
-        if ($this->mode !== 'shared_strings') {
+        if ($this->mode !== StringMode::SharedStrings) {
             return null;
         }
 

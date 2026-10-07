@@ -5,6 +5,9 @@ declare(strict_types=1);
 /*
  * Defaults for XlsxFastAppender (§3.3 of the specification).
  *
+ * `conflict_mode` and `mode` accept the plain strings below or the matching
+ * `XlsxFastAppender\ConflictMode` / `XlsxFastAppender\StringMode` enum cases.
+ *
  * Publish with: php artisan vendor:publish --tag=xlsx-appender
  */
 

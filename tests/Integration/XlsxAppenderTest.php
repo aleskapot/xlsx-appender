@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace XlsxFastAppender\Tests\Integration;
 
 use PHPUnit\Framework\Attributes\CoversClass;
+use XlsxFastAppender\ConflictMode;
 use XlsxFastAppender\Exception\AppenderSizeLimitException;
 use XlsxFastAppender\Exception\ColumnCountMismatchException;
 use XlsxFastAppender\Exception\HeaderConflictException;
@@ -18,6 +19,7 @@ use XlsxFastAppender\Exception\UnsupportedArchiveException;
 use XlsxFastAppender\Exception\UnsupportedValueException;
 use XlsxFastAppender\Exception\WriteFailedException;
 use XlsxFastAppender\SharedStringsStore;
+use XlsxFastAppender\StringMode;
 use XlsxFastAppender\Tests\Support\FailingZip;
 use XlsxFastAppender\Tests\Support\TestCase;
 use XlsxFastAppender\Tests\Support\XlsxFixtureFactory;
@@ -248,6 +250,28 @@ final class XlsxAppenderTest extends TestCase
         self::assertSame(['1', '2', '6', '10'], $this->rowNumbers($sheet));
         self::assertStringContainsString('<t>10</t>', $sheet);
         self::assertStringContainsString('ref="A1:A10"', $sheet);
+    }
+
+    public function testConflictModeEnumBehavesLikeItsStringValue(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([
+            ['1'], ['2'], ['3'], ['4'], ['5'],
+        ])]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A3',
+            'conflict_mode' => ConflictMode::Clear,
+        ]))->append([['x'], ['y']]);
+
+        self::assertSame(2, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertSame(['1', '2', '3', '4'], $this->rowNumbers($sheet));
+        self::assertStringNotContainsString('<t>5</t>', $sheet);
+        self::assertStringContainsString('<t>x</t>', $sheet);
+        self::assertStringContainsString('<t>y</t>', $sheet);
+        self::assertStringContainsString('ref="A1:A4"', $sheet);
+        self::assertFileDoesNotExist($path.'.tmp');
     }
 
     public function testEmptyIterableReturnsZeroAndKeepsFileUntouched(): void
@@ -756,7 +780,9 @@ final class XlsxAppenderTest extends TestCase
         yield 'start_cell not a string' => [['start_cell' => 1], 'Option "start_cell"'];
         yield 'conflict_mode unknown' => [['conflict_mode' => 'wipe'], 'Option "conflict_mode"'];
         yield 'conflict_mode not a string' => [['conflict_mode' => 1], 'Option "conflict_mode"'];
+        yield 'conflict_mode wrong enum' => [['conflict_mode' => StringMode::InlineStr], 'Option "conflict_mode"'];
         yield 'mode unknown' => [['mode' => 'fast'], 'Option "mode"'];
+        yield 'mode wrong enum' => [['mode' => ConflictMode::Error], 'Option "mode"'];
         yield 'size not an int' => [['max_sheet_xml_size' => '1mb'], 'Option "max_sheet_xml_size"'];
         yield 'size not positive' => [['max_sheet_xml_size' => 0], 'Option "max_sheet_xml_size"'];
         yield 'use_lock not a bool' => [['use_lock' => 'yes'], 'Option "use_lock"'];
@@ -806,6 +832,24 @@ final class XlsxAppenderTest extends TestCase
         self::assertStringContainsString('<c r="A2" t="s"><v>0</v></c>', $sheet);
         self::assertStringContainsString('<c r="A3" t="s"><v>0</v></c>', $sheet);
         self::assertStringContainsString('<c r="A4" t="s"><v>1</v></c>', $sheet);
+    }
+
+    public function testStringModeEnumBehavesLikeItsStringValue(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['a']])]);
+
+        $written = (new XlsxAppender($path, ['start_cell' => 'A2', 'mode' => StringMode::SharedStrings]))
+            ->append([['hello'], ['hello']]);
+
+        self::assertSame(2, $written);
+
+        $sst = $this->readEntry($path, SharedStringsStore::SST_ENTRY);
+        self::assertStringContainsString('count="2"', $sst);
+        self::assertStringContainsString('uniqueCount="1"', $sst);
+
+        $sheet = $this->readEntry($path, 'xl/worksheets/sheet1.xml');
+        self::assertStringContainsString('<c r="A2" t="s"><v>0</v></c>', $sheet);
+        self::assertStringContainsString('<c r="A3" t="s"><v>0</v></c>', $sheet);
     }
 
     public function testSharedStringsModeReusesExistingPartAndRefreshesStaleCounts(): void

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `ConflictMode` (`error`, `clear`, `overwrite`) and `StringMode`
+  (`inline_str`, `shared_strings`) backed enums as an alternative form of the
+  `conflict_mode` and `mode` options; plain strings keep working unchanged and
+  anything else raises the usual `InvalidOptionException`.
+
 ## [1.0.0] - 2026-09-25
 
 ### Added

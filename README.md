@@ -68,8 +68,8 @@ need a `start_cell` below existing data:
 |--------|------|---------|-------------|
 | `sheet` | `string\|null` | `null` | Sheet name; `null` selects the first sheet. Unknown name → `SheetNotFoundException` with the list of available names. |
 | `start_cell` | `string` | `'A1'` | Top-left cell for the first data row (e.g. `'A2'` under a header row). Must not intersect existing rows (C2) unless `conflict_mode` says otherwise. |
-| `conflict_mode` | `string` | `'error'` | What to do when `start_cell` points into existing rows: `'error'` throws `StartCellConflictException`, `'clear'` drops every row from `start_cell` to the end of the sheet, `'overwrite'` replaces only the rows the new batch covers. |
-| `mode` | `string` | `'inline_str'` | `'inline_str'` (strings embedded in cells) or `'shared_strings'` (shared `xl/sharedStrings.xml`, deduplicated). |
+| `conflict_mode` | `string\|ConflictMode` | `'error'` | What to do when `start_cell` points into existing rows: `'error'` throws `StartCellConflictException`, `'clear'` drops every row from `start_cell` to the end of the sheet, `'overwrite'` replaces only the rows the new batch covers. |
+| `mode` | `string\|StringMode` | `'inline_str'` | `'inline_str'` (strings embedded in cells) or `'shared_strings'` (shared `xl/sharedStrings.xml`, deduplicated). |
 | `max_sheet_xml_size` | `int` | `268435456` (256 MiB) | Upper bound for the worksheet XML part read into memory (C11). |
 | `use_lock` | `bool` | `true` | Serialise writers through a sidecar `<file>.lock` with `flock` (C12). |
 | `lock_timeout` | `float` | `30.0` | Seconds to wait for the lock before `LockTimeoutException`. |
@@ -80,6 +80,26 @@ need a `start_cell` below existing data:
 
 Unknown options and type violations throw `InvalidOptionException` at
 construction time.
+
+### Enum options
+
+`conflict_mode` and `mode` accept their string values or the matching backed
+enums — handy for IDE autocompletion and safe refactoring:
+
+```php
+use XlsxFastAppender\ConflictMode;
+use XlsxFastAppender\StringMode;
+
+(new XlsxAppender('/data/report.xlsx', [
+    'conflict_mode' => ConflictMode::Clear,        // === 'clear'
+    'mode'          => StringMode::SharedStrings,  // === 'shared_strings'
+]))->append($rows);
+```
+
+`ConflictMode` carries `Error` / `Clear` / `Overwrite`, `StringMode` carries
+`InlineStr` / `SharedStrings`; the published Laravel config accepts both forms
+too. Any other value — a different enum, an unknown string, a wrong type —
+throws `InvalidOptionException`.
 
 ### Conflict modes
 
