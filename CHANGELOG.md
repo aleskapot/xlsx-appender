@@ -8,6 +8,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `create_sheet_if_missing` option: when the requested `sheet` does not exist,
+  append and register a new empty worksheet instead of throwing
+  `SheetNotFoundException`; workbook/content-type/relationship parts are
+  staged in the same atomic save and rolled back on failure.
 - `ConflictMode` (`error`, `clear`, `overwrite`) and `StringMode`
   (`inline_str`, `shared_strings`) backed enums as an alternative form of the
   `conflict_mode` and `mode` options; plain strings keep working unchanged and

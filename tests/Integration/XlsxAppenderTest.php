@@ -446,6 +446,193 @@ final class XlsxAppenderTest extends TestCase
         (new XlsxAppender($path, ['sheet' => 'Missing']))->append([['x']]);
     }
 
+    public function testCreateSheetIfMissingCreatesSheetAndAppendsRows(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['existing']])]);
+        $originalSheet = $this->readEntry($path, self::SHEET_ENTRY);
+
+        $written = (new XlsxAppender($path, [
+            'sheet' => 'New Sheet',
+            'create_sheet_if_missing' => true,
+        ]))->append([['created', 42]]);
+
+        self::assertSame(1, $written);
+
+        $newSheet = $this->readEntry($path, 'xl/worksheets/sheet2.xml');
+        self::assertStringContainsString('<row r="1">', $newSheet);
+        self::assertStringContainsString('<t>created</t>', $newSheet);
+        self::assertStringContainsString('<v>42</v>', $newSheet);
+        self::assertSame($originalSheet, $this->readEntry($path, self::SHEET_ENTRY));
+
+        $workbook = $this->readEntry($path, 'xl/workbook.xml');
+        self::assertStringContainsString('<sheet name="New Sheet" sheetId="2" r:id="rId2"/>', $workbook);
+
+        $relationships = $this->readEntry($path, 'xl/_rels/workbook.xml.rels');
+        self::assertStringContainsString('Id="rId2"', $relationships);
+        self::assertStringContainsString('Target="worksheets/sheet2.xml"', $relationships);
+
+        $contentTypes = $this->readEntry($path, '[Content_Types].xml');
+        self::assertStringContainsString('PartName="/xl/worksheets/sheet2.xml"', $contentTypes);
+        self::assertStringContainsString('spreadsheetml.worksheet+xml', $contentTypes);
+
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($path);
+
+        try {
+            self::assertSame(['Data', 'New Sheet'], $spreadsheet->getSheetNames());
+            $sheet = $spreadsheet->getSheetByName('New Sheet');
+            self::assertNotNull($sheet);
+            self::assertSame('created', $sheet->getCell('A1')->getFormattedValue());
+            self::assertSame('42', $sheet->getCell('B1')->getFormattedValue());
+        } finally {
+            $spreadsheet->disconnectWorksheets();
+        }
+
+        $written = (new XlsxAppender($path, ['sheet' => 'New Sheet', 'start_cell' => 'A2']))
+            ->append([['second']]);
+
+        self::assertSame(1, $written);
+        self::assertStringContainsString('<row r="2">', $this->readEntry($path, 'xl/worksheets/sheet2.xml'));
+    }
+
+    public function testCreateSheetIfMissingCreatesFirstSheetInWorkbookWithoutSheets(): void
+    {
+        $path = $this->fixture([]);
+
+        $written = (new XlsxAppender($path, [
+            'sheet' => 'First',
+            'create_sheet_if_missing' => true,
+        ]))->append([['x']]);
+
+        self::assertSame(1, $written);
+        self::assertStringContainsString('<row r="1">', $this->readEntry($path, 'xl/worksheets/sheet1.xml'));
+        self::assertStringContainsString('<sheet name="First" sheetId="1" r:id="rId1"/>', $this->readEntry($path, 'xl/workbook.xml'));
+    }
+
+    public function testCreateSheetIfMissingKeepsEmptyBatchAsANoOp(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['existing']])]);
+        $before = file_get_contents($path);
+
+        $written = (new XlsxAppender($path, [
+            'sheet' => 'Missing',
+            'create_sheet_if_missing' => true,
+        ]))->append([]);
+
+        self::assertSame(0, $written);
+        self::assertSame($before, file_get_contents($path));
+    }
+
+    public function testCreateSheetIfMissingRollsBackWhenRegistrationFails(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['existing']])]);
+        $before = file_get_contents($path);
+
+        $appender = new XlsxAppender(
+            $path,
+            ['sheet' => 'New', 'create_sheet_if_missing' => true],
+            static function (): FailingZip {
+                $zip = new FailingZip();
+                $zip->failAddFileEntry = 'xl/_rels/workbook.xml.rels';
+
+                return $zip;
+            },
+        );
+
+        try {
+            $appender->append([['x']]);
+            self::fail('Expected WriteFailedException.');
+        } catch (WriteFailedException $exception) {
+            self::assertStringContainsString('workbook relationships part', $exception->getMessage());
+        }
+
+        self::assertSame($before, file_get_contents($path));
+
+        $zip = $this->openZip($path);
+        self::assertFalse($zip->locateName('xl/worksheets/sheet2.xml') !== false);
+    }
+
+    public function testCreateSheetIfMissingSupportsHeaderAndSharedStrings(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['existing']])]);
+
+        $written = (new XlsxAppender($path, [
+            'sheet' => 'Report',
+            'create_sheet_if_missing' => true,
+            'start_cell' => 'A2',
+            'columns' => ['name' => 'Name'],
+            'write_header' => true,
+            'mode' => 'shared_strings',
+        ]))->append([['name' => 'Ada']]);
+
+        self::assertSame(1, $written);
+
+        $sheet = $this->readEntry($path, 'xl/worksheets/sheet2.xml');
+        self::assertStringContainsString('<row r="1">', $sheet);
+        self::assertStringContainsString('<row r="2">', $sheet);
+
+        $sst = $this->readEntry($path, SharedStringsStore::SST_ENTRY);
+        self::assertStringContainsString('<si><t>Name</t></si>', $sst);
+        self::assertStringContainsString('<si><t>Ada</t></si>', $sst);
+
+        $relationships = $this->readEntry($path, 'xl/_rels/workbook.xml.rels');
+        self::assertStringContainsString('/relationships/worksheet', $relationships);
+        self::assertStringContainsString('/relationships/sharedStrings', $relationships);
+
+        $contentTypes = $this->readEntry($path, '[Content_Types].xml');
+        self::assertStringContainsString('PartName="/xl/worksheets/sheet2.xml"', $contentTypes);
+        self::assertStringContainsString('PartName="/xl/sharedStrings.xml"', $contentTypes);
+    }
+
+    public function testCreateSheetIfMissingRejectsCaseInsensitiveDuplicate(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['existing']])]);
+        $before = file_get_contents($path);
+
+        try {
+            (new XlsxAppender($path, [
+                'sheet' => 'data',
+                'create_sheet_if_missing' => true,
+            ]))->append([['x']]);
+            self::fail('Expected InvalidOptionException.');
+        } catch (InvalidOptionException $exception) {
+            self::assertStringContainsString('case-insensitive', $exception->getMessage());
+        }
+
+        self::assertSame($before, file_get_contents($path));
+    }
+
+    /**
+     * @param array<string, mixed> $options
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidCreatedSheetNameProvider')]
+    public function testCreateSheetIfMissingRejectsInvalidSheetNames(array $options, string $expectedMessage): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['existing']])]);
+        $before = file_get_contents($path);
+
+        try {
+            (new XlsxAppender($path, $options + ['create_sheet_if_missing' => true]))->append([['x']]);
+            self::fail('Expected InvalidOptionException.');
+        } catch (InvalidOptionException $exception) {
+            self::assertStringContainsString($expectedMessage, $exception->getMessage());
+        }
+
+        self::assertSame($before, file_get_contents($path));
+    }
+
+    /**
+     * @return iterable<string, array{array<string, mixed>, string}>
+     */
+    public static function invalidCreatedSheetNameProvider(): iterable
+    {
+        yield 'empty' => [['sheet' => ''], 'must not be empty'];
+        yield 'too long' => [['sheet' => str_repeat('a', 32)], 'limited to 31'];
+        yield 'forbidden character' => [['sheet' => 'bad/name'], 'cannot contain'];
+        yield 'control character' => [['sheet' => "bad\x01name"], 'control characters'];
+        yield 'leading apostrophe' => [['sheet' => "'quoted"], 'apostrophe'];
+        yield 'trailing apostrophe' => [['sheet' => "quoted'"], 'apostrophe'];
+    }
+
     public function testReadOnlyFileThrowsWriteFailed(): void
     {
         $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['a']])]);
@@ -777,6 +964,7 @@ final class XlsxAppenderTest extends TestCase
     public static function invalidOptionProvider(): iterable
     {
         yield 'sheet not a string' => [['sheet' => 42], 'Option "sheet"'];
+        yield 'create_sheet_if_missing not a bool' => [['create_sheet_if_missing' => 'yes'], 'Option "create_sheet_if_missing"'];
         yield 'start_cell not a string' => [['start_cell' => 1], 'Option "start_cell"'];
         yield 'conflict_mode unknown' => [['conflict_mode' => 'wipe'], 'Option "conflict_mode"'];
         yield 'conflict_mode not a string' => [['conflict_mode' => 1], 'Option "conflict_mode"'];

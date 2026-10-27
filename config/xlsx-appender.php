@@ -13,6 +13,7 @@ declare(strict_types=1);
 
 return [
     'sheet' => null,
+    'create_sheet_if_missing' => false,
     'start_cell' => 'A2',
     'conflict_mode' => 'error',
     'mode' => 'inline_str',

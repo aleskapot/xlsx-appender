@@ -9,6 +9,7 @@ use XlsxFastAppender\Exception\InvalidCellReferenceException;
 use XlsxFastAppender\Exception\InvalidOptionException;
 use XlsxFastAppender\Exception\InvalidWorkbookException;
 use XlsxFastAppender\Exception\LockTimeoutException;
+use XlsxFastAppender\Exception\SheetNotFoundException;
 use XlsxFastAppender\Exception\StartCellConflictException;
 use XlsxFastAppender\Exception\UnsupportedArchiveException;
 use XlsxFastAppender\Exception\WriteFailedException;
@@ -29,6 +30,7 @@ final class XlsxAppender
      */
     private const KNOWN_OPTIONS = [
         'sheet',
+        'create_sheet_if_missing',
         'start_cell',
         'conflict_mode',
         'mode',
@@ -54,6 +56,8 @@ final class XlsxAppender
     private const LOCK_POLL_INTERVAL_MICROSECONDS = 50000;
 
     private readonly ?string $sheet;
+
+    private readonly bool $createSheetIfMissing;
 
     private readonly CellAddress $startCell;
 
@@ -112,6 +116,17 @@ final class XlsxAppender
         }
 
         $this->sheet = $sheet;
+
+        $createSheetIfMissing = $options['create_sheet_if_missing'] ?? false;
+
+        if (!\is_bool($createSheetIfMissing)) {
+            throw new InvalidOptionException(\sprintf(
+                'Option "create_sheet_if_missing" must be a bool, got %s.',
+                get_debug_type($createSheetIfMissing),
+            ));
+        }
+
+        $this->createSheetIfMissing = $createSheetIfMissing;
 
         $startCell = $options['start_cell'] ?? 'A1';
 
@@ -314,12 +329,61 @@ final class XlsxAppender
 
         try {
             $inspector = new WorkbookInspector($this->path, $zip);
-            $sheetPath = $inspector->resolveSheet($this->sheet);
+            $createdSheet = null;
+
+            try {
+                $sheetPath = $inspector->resolveSheet($this->sheet);
+            } catch (SheetNotFoundException $exception) {
+                if (!$this->createSheetIfMissing || $this->sheet === null) {
+                    throw $exception;
+                }
+
+                $createdSheet = (new WorkbookSheetCreator($this->path, $zip))->create($this->sheet);
+                $sheetPath = $createdSheet->entry;
+            }
+
             $store = $this->loadSharedStrings($inspector);
-            $result = $this->spliceInto($inspector, $sheetPath, $records, $store);
+            $result = $this->spliceInto(
+                $inspector,
+                $sheetPath,
+                $records,
+                $store,
+                $createdSheet?->worksheetXml,
+            );
 
             if ($result->isEmpty()) {
                 return 0;
+            }
+
+            $contentTypes = $createdSheet->contentTypesXml
+                ?? $zip->getFromName(SharedStringsStore::CONTENT_TYPES_ENTRY);
+            $relationships = $createdSheet->relationshipsXml
+                ?? $zip->getFromName(SharedStringsStore::RELATIONSHIPS_ENTRY);
+            $contentTypesChanged = $createdSheet !== null;
+            $relationshipsChanged = $createdSheet !== null;
+
+            if ($store !== null && $store->hasNewReferences()) {
+                $this->writeSharedStringsPart($zip, $store);
+
+                if (!$store->sharedStringsFileExisted()) {
+                    if (\is_string($contentTypes)) {
+                        $patched = $store->contentTypesXml($contentTypes);
+
+                        if ($patched !== null) {
+                            $contentTypes = $patched;
+                            $contentTypesChanged = true;
+                        }
+                    }
+
+                    if (\is_string($relationships)) {
+                        $patched = $store->relationshipsXml($relationships);
+
+                        if ($patched !== null) {
+                            $relationships = $patched;
+                            $relationshipsChanged = true;
+                        }
+                    }
+                }
             }
 
             if (!$zip->addFile($this->tmpPath(), $sheetPath)) {
@@ -329,8 +393,28 @@ final class XlsxAppender
                 ));
             }
 
-            if ($store !== null && $store->hasNewReferences()) {
-                $this->writeSharedStrings($zip, $store);
+            if ($createdSheet !== null) {
+                $this->addEntryContent($zip, 'xl/workbook.xml', $createdSheet->workbookXml, 'workbook part');
+            }
+
+            if ($contentTypesChanged && \is_string($contentTypes)) {
+                $this->addPatchedEntry(
+                    $zip,
+                    $this->tmpPath().'.ct',
+                    $contentTypes,
+                    SharedStringsStore::CONTENT_TYPES_ENTRY,
+                    'content types part',
+                );
+            }
+
+            if ($relationshipsChanged && \is_string($relationships)) {
+                $this->addPatchedEntry(
+                    $zip,
+                    $this->tmpPath().'.rels',
+                    $relationships,
+                    SharedStringsStore::RELATIONSHIPS_ENTRY,
+                    'workbook relationships part',
+                );
             }
 
             $closed = true;
@@ -361,15 +445,17 @@ final class XlsxAppender
      * The zip entry is written by the caller only when rows were produced.
      *
      * @param iterable<mixed>           $records
-     * @param SharedStringsStore|null   $store    shared-strings index for "shared_strings" mode (§3.2)
+     * @param SharedStringsStore|null   $store     shared-strings index for "shared_strings" mode (§3.2)
+     * @param string|null               $sheetXml  XML of a sheet created in this run (not readable from the open archive yet)
      */
     private function spliceInto(
         WorkbookInspector $inspector,
         string $sheetPath,
         iterable $records,
         ?SharedStringsStore $store,
+        ?string $sheetXml = null,
     ): SpliceResult {
-        $sheetXml = $inspector->readSheetXml($sheetPath, $this->maxSheetXmlSize);
+        $sheetXml ??= $inspector->readSheetXml($sheetPath, $this->maxSheetXmlSize);
         $scan = $inspector->scan($sheetXml);
 
         $startRow = $this->startCell->row;
@@ -462,10 +548,9 @@ final class XlsxAppender
     }
 
     /**
-     * Writes the rebuilt xl/sharedStrings.xml (and, when the part did not
-     * exist, its content-type/relationship registrations) into the archive.
+     * Stages the rebuilt xl/sharedStrings.xml part in the archive.
      */
-    private function writeSharedStrings(\ZipArchive $zip, SharedStringsStore $store): void
+    private function writeSharedStringsPart(\ZipArchive $zip, SharedStringsStore $store): void
     {
         $this->addPatchedEntry(
             $zip,
@@ -474,41 +559,12 @@ final class XlsxAppender
             SharedStringsStore::SST_ENTRY,
             'shared strings part',
         );
+    }
 
-        if ($store->sharedStringsFileExisted()) {
-            return;
-        }
-
-        $contentTypes = $zip->getFromName(SharedStringsStore::CONTENT_TYPES_ENTRY);
-
-        if ($contentTypes !== false) {
-            $patched = $store->contentTypesXml($contentTypes);
-
-            if ($patched !== null) {
-                $this->addPatchedEntry(
-                    $zip,
-                    $this->tmpPath().'.ct',
-                    $patched,
-                    SharedStringsStore::CONTENT_TYPES_ENTRY,
-                    'content types part',
-                );
-            }
-        }
-
-        $relationships = $zip->getFromName(SharedStringsStore::RELATIONSHIPS_ENTRY);
-
-        if ($relationships !== false) {
-            $patched = $store->relationshipsXml($relationships);
-
-            if ($patched !== null) {
-                $this->addPatchedEntry(
-                    $zip,
-                    $this->tmpPath().'.rels',
-                    $patched,
-                    SharedStringsStore::RELATIONSHIPS_ENTRY,
-                    'workbook relationships part',
-                );
-            }
+    private function addEntryContent(\ZipArchive $zip, string $entry, string $content, string $label): void
+    {
+        if ($zip->addFromString($entry, $content) !== true) {
+            throw new WriteFailedException(\sprintf('Unable to write the %s into "%s".', $label, $this->path));
         }
     }
 

@@ -28,6 +28,7 @@ final class ServiceProviderTest extends LaravelTestCase
 
         self::assertIsArray($config);
         self::assertNull($config['sheet']);
+        self::assertFalse($config['create_sheet_if_missing']);
         self::assertSame('A2', $config['start_cell']);
         self::assertSame('error', $config['conflict_mode']);
         self::assertSame('inline_str', $config['mode']);

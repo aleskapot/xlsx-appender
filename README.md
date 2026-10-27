@@ -66,7 +66,8 @@ need a `start_cell` below existing data:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `sheet` | `string\|null` | `null` | Sheet name; `null` selects the first sheet. Unknown name → `SheetNotFoundException` with the list of available names. |
+| `sheet` | `string\|null` | `null` | Sheet name; `null` selects the first sheet. Unknown name → `SheetNotFoundException` with the list of available names, unless `create_sheet_if_missing` is enabled. |
+| `create_sheet_if_missing` | `bool` | `false` | Create the sheet named by `sheet` when it does not exist. The new empty sheet is appended last and fully registered; requires a non-null `sheet`. Invalid Excel names and case-insensitive duplicates raise `InvalidOptionException`. |
 | `start_cell` | `string` | `'A1'` | Top-left cell for the first data row (e.g. `'A2'` under a header row). Must not intersect existing rows (C2) unless `conflict_mode` says otherwise. |
 | `conflict_mode` | `string\|ConflictMode` | `'error'` | What to do when `start_cell` points into existing rows: `'error'` throws `StartCellConflictException`, `'clear'` drops every row from `start_cell` to the end of the sheet, `'overwrite'` replaces only the rows the new batch covers. |
 | `mode` | `string\|StringMode` | `'inline_str'` | `'inline_str'` (strings embedded in cells) or `'shared_strings'` (shared `xl/sharedStrings.xml`, deduplicated). |
@@ -80,6 +81,25 @@ need a `start_cell` below existing data:
 
 Unknown options and type violations throw `InvalidOptionException` at
 construction time.
+
+### Creating a missing sheet
+
+By default an unknown `sheet` name throws `SheetNotFoundException`. Enable
+`create_sheet_if_missing` to append a new empty sheet instead:
+
+```php
+(new XlsxAppender('/data/report.xlsx', [
+    'sheet' => 'March',
+    'create_sheet_if_missing' => true,
+]))->append($rows);
+```
+
+The sheet is added as the last worksheet, starts empty, and works with
+`write_header`, `columns`, `conflict_mode` and `shared_strings`. An empty batch
+remains a no-op and does not create the sheet. The name must follow Excel's
+rules (1–31 characters, none of `: \ / ? * [ ]`, no control characters, no
+leading/trailing apostrophe) and must not duplicate an existing name
+case-insensitively.
 
 ### Enum options
 
@@ -275,7 +295,7 @@ All exceptions extend `XlsxFastAppender\Exception\AppenderException`.
 | `InvalidCellReferenceException` | `start_cell` unparseable or out of Excel limits (C18); column overflow (C26); `write_header` at row 1 (C22). |
 | `StartCellConflictException` | `start_cell` intersects existing rows or a row gap (C2, C3); only with `conflict_mode='error'` — `'clear'`/`'overwrite'` rewrite instead. |
 | `HeaderConflictException` | `write_header` on a sheet that already has rows (C23). |
-| `SheetNotFoundException` | Sheet name not found; carries `availableSheets` (C5). |
+| `SheetNotFoundException` | Sheet name not found; carries `availableSheets` (C5). Not thrown when `create_sheet_if_missing=true` and `sheet` is set. |
 | `InvalidWorkbookException` | Not a valid XLSX: missing/malformed workbook, rels, worksheet, or `sharedStrings.xml` (C14). |
 | `ColumnCountMismatchException` | Positional record width ≠ column count, or extra keys with `strict_columns` (C24, C25). |
 | `UnsupportedValueException` | Cell value type not supported (DateTime, arrays, objects without `map()`…). |
@@ -301,7 +321,9 @@ files are removed, and the lock is released in `finally`.
 ## Atomicity and locking
 
 - The worksheet is spliced into a temp file, verified (parsed again), then the
-  archive entry is replaced and saved in a single `close()`. Any failure —
+  archive entry is replaced and saved in a single `close()`. When
+  `create_sheet_if_missing` adds a worksheet, its part and all workbook
+  registrations are staged in the same uncommitted transaction. Any failure —
   including an iterator throwing halfway — leaves the original bytes intact.
 - `use_lock=true` (default) takes a non-blocking `flock(LOCK_EX)` on a
   **sidecar** `<file>.lock`, polled every 50 ms up to `lock_timeout`. A sidecar
