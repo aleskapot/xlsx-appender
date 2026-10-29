@@ -64,20 +64,21 @@ need a `start_cell` below existing data:
 
 ## Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `sheet` | `string\|null` | `null` | Sheet name; `null` selects the first sheet. Unknown name → `SheetNotFoundException` with the list of available names, unless `create_sheet_if_missing` is enabled. |
-| `create_sheet_if_missing` | `bool` | `false` | Create the sheet named by `sheet` when it does not exist. The new empty sheet is appended last and fully registered; requires a non-null `sheet`. Invalid Excel names and case-insensitive duplicates raise `InvalidOptionException`. |
-| `start_cell` | `string` | `'A1'` | Top-left cell for the first data row (e.g. `'A2'` under a header row). Must not intersect existing rows (C2) unless `conflict_mode` says otherwise. |
-| `conflict_mode` | `string\|ConflictMode` | `'error'` | What to do when `start_cell` points into existing rows: `'error'` throws `StartCellConflictException`, `'clear'` drops every row from `start_cell` to the end of the sheet, `'overwrite'` replaces only the rows the new batch covers. |
-| `mode` | `string\|StringMode` | `'inline_str'` | `'inline_str'` (strings embedded in cells) or `'shared_strings'` (shared `xl/sharedStrings.xml`, deduplicated). |
-| `max_sheet_xml_size` | `int` | `268435456` (256 MiB) | Upper bound for the worksheet XML part read into memory (C11). |
-| `use_lock` | `bool` | `true` | Serialise writers through a sidecar `<file>.lock` with `flock` (C12). |
-| `lock_timeout` | `float` | `30.0` | Seconds to wait for the lock before `LockTimeoutException`. |
-| `skip_nulls` | `bool` | `true` | Skip `null` values (empty cells) instead of writing empty ones (C16). |
-| `columns` | `array\|null` | `null` | `list<string>` of keys, or `array<string,string>` key => header label. Enables key-based mapping for associative arrays/objects. |
-| `write_header` | `bool` | `false` | Write the header row once at `start_cell − 1`; requires `columns` and an empty sheet (C21–C23). |
-| `strict_columns` | `bool` | `false` | Reject records containing keys outside `columns` (C24). |
+| Option                    | Type                   | Default               | Description                                                                                                                                                                                                                            |
+|---------------------------|------------------------|-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `sheet`                   | `string\|null`         | `null`                | Sheet name; `null` selects the first sheet. Unknown name → `SheetNotFoundException` with the list of available names, unless `create_sheet_if_missing` is enabled.                                                                     |
+| `create_sheet_if_missing` | `bool`                 | `false`               | Create the sheet named by `sheet` when it does not exist. The new empty sheet is appended last and fully registered; requires a non-null `sheet`. Invalid Excel names and case-insensitive duplicates raise `InvalidOptionException`.  |
+| `start_cell`              | `string`               | `'A1'`                | Top-left cell for the first data row (e.g. `'A2'` under a header row). Must not intersect existing rows (C2) unless `conflict_mode` says otherwise.                                                                                    |
+| `conflict_mode`           | `string\|ConflictMode` | `'error'`             | What to do when `start_cell` points into existing rows: `'error'` throws `StartCellConflictException`, `'clear'` drops every row from `start_cell` to the end of the sheet, `'overwrite'` replaces only the rows the new batch covers. |
+| `mode`                    | `string\|StringMode`   | `'inline_str'`        | `'inline_str'` (strings embedded in cells) or `'shared_strings'` (shared `xl/sharedStrings.xml`, deduplicated).                                                                                                                        |
+| `max_sheet_xml_size`      | `int`                  | `268435456` (256 MiB) | Upper bound for the worksheet XML part read into memory (C11).                                                                                                                                                                         |
+| `use_lock`                | `bool`                 | `true`                | Serialise writers through a sidecar `<file>.lock` with `flock` (C12).                                                                                                                                                                  |
+| `lock_timeout`            | `float`                | `30.0`                | Seconds to wait for the lock before `LockTimeoutException`.                                                                                                                                                                            |
+| `skip_nulls`              | `bool`                 | `true`                | Skip `null` values (empty cells) instead of writing empty ones (C16).                                                                                                                                                                  |
+| `columns`                 | `array\|null`          | `null`                | `list<string>` of keys, or `array<string,string>` key => header label. Enables key-based mapping for associative arrays/objects.                                                                                                       |
+| `write_header`            | `bool`                 | `false`               | Write the header row once at `start_cell − 1`; requires `columns` and an empty sheet (C21–C23).                                                                                                                                        |
+| `strict_columns`          | `bool`                 | `false`               | Reject records containing keys outside `columns` (C24).                                                                                                                                                                                |
+| `date_format`             | `string\|null`         | `null`                | Excel number-format code (e.g. `'DD.MM.YYYY'`) enabling date cells; `null` keeps writing everything as text/numbers (C30). See [Date cells](#date-cells).                                                                              |
 
 Unknown options and type violations throw `InvalidOptionException` at
 construction time.
@@ -171,6 +172,40 @@ $appender = new XlsxAppender('/data/report.xlsx', [
 `null` values are skipped by default (`skip_nulls=true`), so sparse associative
 records align correctly. Objects (including Eloquent models) are read via
 `getAttribute()` when they provide it, then public properties, then `__get`.
+
+### Date cells
+
+Setting `date_format` to an Excel number-format code turns date-like values
+into real date cells (C30):
+
+```php
+(new XlsxAppender('/data/report.xlsx', [
+    'date_format' => 'DD.MM.YYYY',
+]))->append([
+    ['2026-10-29'],                              // string, recognized shape
+    [new \DateTimeImmutable('2026-10-29')],      // any DateTimeInterface
+    ['2026-10-29 14:30:00'],                     // date + time fraction
+    ['not a date'],                              // stays a plain text cell
+]);
+```
+
+- **Recognized string shapes** (exact match, no fuzzy parsing): `Y-m-d`,
+  `Y-m-d H:i:s`, `Y-m-d\TH:i:s`, `d.m.Y`, `d.m.Y H:i:s`. Values that merely
+  look date-ish (`2026-10-29 14:30`, `2026-02-31`, `12345`) stay ordinary
+  text cells — no errors, no coercion.
+- **`DateTimeInterface` values** are accepted only when `date_format` is set;
+  without the option they raise `UnsupportedValueException` as before.
+- The cell stores Excel's 1900-system serial number; the format code is
+  registered in `xl/styles.xml` as a custom `numFmt` (id ≥ 164) with a
+  dedicated cell style, reusing a matching entry when the workbook already
+  has one. Workbooks without a styles part get a minimal one, registered in
+  `[Content_Types].xml` and `workbook.xml.rels`.
+- Supported date range: **1900-01-01 … 9999-12-31**. Values outside it raise
+  `UnsupportedValueException` with the cell address (Excel's 1900 system has
+  no serials for them). The date's timezone is used as-is — no UTC
+  conversion.
+- In `shared_strings` mode, date cells never enter `xl/sharedStrings.xml`.
+- An empty batch stays a no-op: the file (and any styles part) is untouched.
 
 ## Modes
 
@@ -289,20 +324,20 @@ foreach ($reports->chunk(1000) as $i => $chunk) {
 
 All exceptions extend `XlsxFastAppender\Exception\AppenderException`.
 
-| Exception | When |
-|-----------|------|
-| `InvalidOptionException` | Unknown/invalid option, or invalid container `path`/`options` binding parameters. |
-| `InvalidCellReferenceException` | `start_cell` unparseable or out of Excel limits (C18); column overflow (C26); `write_header` at row 1 (C22). |
-| `StartCellConflictException` | `start_cell` intersects existing rows or a row gap (C2, C3); only with `conflict_mode='error'` — `'clear'`/`'overwrite'` rewrite instead. |
-| `HeaderConflictException` | `write_header` on a sheet that already has rows (C23). |
-| `SheetNotFoundException` | Sheet name not found; carries `availableSheets` (C5). Not thrown when `create_sheet_if_missing=true` and `sheet` is set. |
-| `InvalidWorkbookException` | Not a valid XLSX: missing/malformed workbook, rels, worksheet, or `sharedStrings.xml` (C14). |
-| `ColumnCountMismatchException` | Positional record width ≠ column count, or extra keys with `strict_columns` (C24, C25). |
-| `UnsupportedValueException` | Cell value type not supported (DateTime, arrays, objects without `map()`…). |
-| `AppenderSizeLimitException` | Worksheet or shared-strings part exceeds `max_sheet_xml_size` (C11). |
-| `UnsupportedArchiveException` | Archive larger than 4 GB — v1 writes zip32 only (C20). |
-| `LockTimeoutException` | Lock held by another process longer than `lock_timeout` (C12). |
-| `WriteFailedException` | Temporary file, permission or zip write/close failure. |
+| Exception                       | When                                                                                                                                                                 |
+|---------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `InvalidOptionException`        | Unknown/invalid option, or invalid container `path`/`options` binding parameters.                                                                                    |
+| `InvalidCellReferenceException` | `start_cell` unparseable or out of Excel limits (C18); column overflow (C26); `write_header` at row 1 (C22).                                                         |
+| `StartCellConflictException`    | `start_cell` intersects existing rows or a row gap (C2, C3); only with `conflict_mode='error'` — `'clear'`/`'overwrite'` rewrite instead.                            |
+| `HeaderConflictException`       | `write_header` on a sheet that already has rows (C23).                                                                                                               |
+| `SheetNotFoundException`        | Sheet name not found; carries `availableSheets` (C5). Not thrown when `create_sheet_if_missing=true` and `sheet` is set.                                             |
+| `InvalidWorkbookException`      | Not a valid XLSX: missing/malformed workbook, rels, worksheet, or `sharedStrings.xml` (C14).                                                                         |
+| `ColumnCountMismatchException`  | Positional record width ≠ column count, or extra keys with `strict_columns` (C24, C25).                                                                              |
+| `UnsupportedValueException`     | Cell value type not supported (arrays, objects without `map()`…); `DateTimeInterface` without `date_format`; dates outside 1900-01-01…9999-12-31 with `date_format`. |
+| `AppenderSizeLimitException`    | Worksheet or shared-strings part exceeds `max_sheet_xml_size` (C11).                                                                                                 |
+| `UnsupportedArchiveException`   | Archive larger than 4 GB — v1 writes zip32 only (C20).                                                                                                               |
+| `LockTimeoutException`          | Lock held by another process longer than `lock_timeout` (C12).                                                                                                       |
+| `WriteFailedException`          | Temporary file, permission or zip write/close failure.                                                                                                               |
 
 On any exception the original file is left **byte-identical**: entries are
 added to an uncommitted archive state and rolled back (`unchangeAll()`), temp
@@ -317,6 +352,8 @@ files are removed, and the lock is released in `finally`.
   `UnsupportedArchiveException` instead of corrupting the zip (C20).
 - Characters forbidden in XML (`\x00`, `\x01`, …) are rejected with the cell
   address in the message.
+- Date cells (`date_format`): 1900-01-01 … 9999-12-31; values outside raise
+  `UnsupportedValueException`.
 
 ## Atomicity and locking
 
@@ -346,22 +383,23 @@ Variant C (this package) reads the worksheet XML, splices and rewrites it:
 - **−** A single worksheet must fit into `max_sheet_xml_size` (default
   256 MiB). For larger sheets, migrate the read/splice layer to an unzipping
   pipe or a streaming zip reader — the public API (`append()`) does not change.
-- **−** Workbook-level features (styles, formulas on other sheets, charts) are
-  never touched; the file is re-saved by the same zip library, so
-  byte-identity is guaranteed only for entries the appender does not modify
-  (it modifies only the target worksheet, and `sharedStrings.xml` +
-  registrations in `shared_strings` mode).
+- **−** Workbook-level features (formulas on other sheets, charts) are never
+  touched; the file is re-saved by the same zip library, so byte-identity is
+  guaranteed only for entries the appender does not modify (it modifies only
+  the target worksheet, plus `sharedStrings.xml` + registrations in
+  `shared_strings` mode, and `styles.xml` + registrations when `date_format`
+  is used).
 
 ## Benchmark
 
 100 000 rows × 3 columns appended to an empty sheet (PHP 8.3, Windows,
 `tests/Memory/MemoryBenchmarkTest`, DoD budget = sheet XML × 2.5 + 4 MiB):
 
-| Metric | Value |
-|--------|-------|
-| Sheet XML after append | 18.0 MB |
+| Metric                                   | Value                                 |
+|------------------------------------------|---------------------------------------|
+| Sheet XML after append                   | 18.0 MB                               |
 | Peak memory (exact allocator accounting) | ~0.4 MB over baseline (budget: 49 MB) |
-| Wall time | ~8.3 s |
+| Wall time                                | ~8.3 s                                |
 
 Peak stays flat because rows stream straight to a temp file: the sheet XML is
 never held in memory together with the generated rows. The test fails if the
@@ -374,7 +412,7 @@ composer check          # cs-fixer (dry-run) + phpstan (max, strict) + phpunit
 composer test:coverage  # with coverage (xdebug)
 ```
 
-29 corner cases (C1–C29) and the full matrix are tracked in
+30 corner cases (C1–C30) and the full matrix are tracked in
 `tests/coverage-matrix.md`.
 
 ## License

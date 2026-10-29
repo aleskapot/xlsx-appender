@@ -8,6 +8,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `date_format` option: an Excel number-format code (e.g. `'DD.MM.YYYY'`)
+  enabling date cells. `DateTimeInterface` values and strings in the exact
+  shapes `Y-m-d`, `Y-m-d H:i:s`, `Y-m-d\TH:i:s`, `d.m.Y`, `d.m.Y H:i:s` are
+  written as 1900-system serial numbers with that format; unparsable strings
+  stay plain text cells. The format is registered in `xl/styles.xml` as a
+  custom `numFmt` (reused when already present); workbooks without a styles
+  part get a minimal one with full content-type/relationship registrations,
+  staged in the same atomic save. `DateTimeInterface` without the option keeps
+  raising `UnsupportedValueException`; dates outside 1900-01-01…9999-12-31
+  raise it with the cell address (C30).
 - `create_sheet_if_missing` option: when the requested `sheet` does not exist,
   append and register a new empty worksheet instead of throwing
   `SheetNotFoundException`; workbook/content-type/relationship parts are

@@ -8,6 +8,9 @@ declare(strict_types=1);
  * `conflict_mode` and `mode` accept the plain strings below or the matching
  * `XlsxFastAppender\ConflictMode` / `XlsxFastAppender\StringMode` enum cases.
  *
+ * `date_format` is an Excel number-format code (e.g. 'DD.MM.YYYY'); null
+ * keeps every value as-is (strings stay text, DateTime values are rejected).
+ *
  * Publish with: php artisan vendor:publish --tag=xlsx-appender
  */
 
@@ -24,4 +27,5 @@ return [
     'columns' => null,
     'write_header' => false,
     'strict_columns' => false,
+    'date_format' => null,
 ];

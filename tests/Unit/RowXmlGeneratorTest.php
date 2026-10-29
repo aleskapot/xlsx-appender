@@ -6,6 +6,7 @@ namespace XlsxFastAppender\Tests\Unit;
 
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
+use XlsxFastAppender\DateCell;
 use XlsxFastAppender\Exception\InvalidCellReferenceException;
 use XlsxFastAppender\Exception\UnsupportedValueException;
 use XlsxFastAppender\RowXmlGenerator;
@@ -13,6 +14,7 @@ use XlsxFastAppender\SharedStringsStore;
 use XlsxFastAppender\Tests\Support\TestCase;
 
 #[CoversClass(RowXmlGenerator::class)]
+#[CoversClass(DateCell::class)]
 final class RowXmlGeneratorTest extends TestCase
 {
     public function testEmitsInlineStringCell(): void
@@ -259,8 +261,90 @@ final class RowXmlGeneratorTest extends TestCase
         $this->generator(1, true, SharedStringsStore::withoutFile())->rowXml(1, [\INF]);
     }
 
-    private function generator(int $startColumn = 1, bool $skipNulls = true, ?SharedStringsStore $strings = null): RowXmlGenerator
+    public function testWritesDateTimeValuesWhenDateStyleIsConfigured(): void
     {
-        return new RowXmlGenerator($startColumn, $skipNulls, $strings);
+        $xml = $this->generator(dateStyle: 3)->rowXml(2, [new \DateTimeImmutable('2026-10-29 12:00:00')]);
+
+        self::assertSame('<row r="2"><c r="A2" s="3"><v>46324.5</v></c></row>', $xml);
+    }
+
+    #[DataProvider('dateShapeProvider')]
+    public function testWritesDateStringCellsWhenDateStyleIsConfigured(string $value): void
+    {
+        $xml = $this->generator(dateStyle: 2)->rowXml(7, [$value]);
+
+        self::assertSame('<row r="7"><c r="A7" s="2"><v>46324</v></c></row>', $xml);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function dateShapeProvider(): iterable
+    {
+        yield 'iso date' => ['2026-10-29'];
+        yield 'dotted european' => ['29.10.2026'];
+    }
+
+    public function testWritesTimeFractionForDatetimeStrings(): void
+    {
+        $xml = $this->generator(dateStyle: 4)->rowXml(1, ['2026-10-29 12:00:00']);
+
+        self::assertStringContainsString('<v>46324.5</v>', $xml);
+        self::assertStringContainsString('s="4"', $xml);
+    }
+
+    public function testKeepsUnrecognizedStringsAsTextWhenDatesAreEnabled(): void
+    {
+        $xml = $this->generator(dateStyle: 2)->rowXml(1, ['2026-10-29 14:30', 'not a date', '12345']);
+
+        self::assertSame(
+            '<row r="1">'
+            .'<c r="A1" t="inlineStr"><is><t>2026-10-29 14:30</t></is></c>'
+            .'<c r="B1" t="inlineStr"><is><t>not a date</t></is></c>'
+            .'<c r="C1" t="inlineStr"><is><t>12345</t></is></c>'
+            .'</row>',
+            $xml,
+        );
+    }
+
+    public function testWritesDateCellsAndPlainValuesInTheSameRow(): void
+    {
+        $xml = $this->generator(dateStyle: 1)->rowXml(5, ['2026-10-29', 42, null, 'x']);
+
+        self::assertSame(
+            '<row r="5">'
+            .'<c r="A5" s="1"><v>46324</v></c>'
+            .'<c r="B5"><v>42</v></c>'
+            .'<c r="D5" t="inlineStr"><is><t>x</t></is></c>'
+            .'</row>',
+            $xml,
+        );
+    }
+
+    public function testDateStringInSharedStringsModeDoesNotEnterTheStore(): void
+    {
+        $store = SharedStringsStore::withoutFile();
+
+        $xml = $this->generator(1, true, $store, 5)->rowXml(1, ['2026-10-29']);
+
+        self::assertSame('<row r="1"><c r="A1" s="5"><v>46324</v></c></row>', $xml);
+        self::assertFalse($store->hasNewReferences());
+    }
+
+    public function testRejectsDatesOutsideTheExcelRangeWithCellAddress(): void
+    {
+        $this->expectException(UnsupportedValueException::class);
+        $this->expectExceptionMessage('Cell B7: dates before 1900-01-01');
+
+        $this->generator(2, dateStyle: 1)->rowXml(7, [new \DateTimeImmutable('1899-12-31')]);
+    }
+
+    private function generator(
+        int $startColumn = 1,
+        bool $skipNulls = true,
+        ?SharedStringsStore $strings = null,
+        ?int $dateStyle = null,
+    ): RowXmlGenerator {
+        return new RowXmlGenerator($startColumn, $skipNulls, $strings, $dateStyle);
     }
 }

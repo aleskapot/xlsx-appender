@@ -39,6 +39,7 @@ final class ServiceProviderTest extends LaravelTestCase
         self::assertNull($config['columns']);
         self::assertFalse($config['write_header']);
         self::assertFalse($config['strict_columns']);
+        self::assertNull($config['date_format']);
     }
 
     public function testContainerBindsFreshAppendersThatReadConfig(): void

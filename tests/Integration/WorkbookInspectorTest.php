@@ -9,6 +9,7 @@ use XlsxFastAppender\Exception\AppenderSizeLimitException;
 use XlsxFastAppender\Exception\InvalidWorkbookException;
 use XlsxFastAppender\Exception\SheetNotFoundException;
 use XlsxFastAppender\SheetDataScanner;
+use XlsxFastAppender\StylesStore;
 use XlsxFastAppender\Tests\Support\FailingZip;
 use XlsxFastAppender\Tests\Support\TestCase;
 use XlsxFastAppender\Tests\Support\XlsxFixtureFactory;
@@ -461,6 +462,62 @@ final class WorkbookInspectorTest extends TestCase
             self::fail('Expected InvalidWorkbookException.');
         } catch (InvalidWorkbookException $exception) {
             self::assertStringContainsString('sharedStrings', $exception->getMessage());
+        } finally {
+            $zip->close();
+        }
+    }
+
+    public function testReadStylesReturnsNullWhenThePartIsMissing(): void
+    {
+        $path = XlsxFixtureFactory::create($this->tempFilePath(), ['Data' => XlsxFixtureFactory::worksheet([['a']])]);
+
+        self::assertNull($this->inspector($path)->readStyles(\PHP_INT_MAX));
+    }
+
+    public function testReadStylesReturnsTheExistingPart(): void
+    {
+        $styles = '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            .'<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+            .'</styleSheet>';
+        $path = XlsxFixtureFactory::create(
+            $this->tempFilePath(),
+            ['Data' => XlsxFixtureFactory::worksheet([['a']])],
+            [StylesStore::STYLES_ENTRY => $styles],
+        );
+
+        self::assertSame($styles, $this->inspector($path)->readStyles(\PHP_INT_MAX));
+    }
+
+    public function testReadStylesEnforcesTheSizeLimit(): void
+    {
+        $path = XlsxFixtureFactory::create(
+            $this->tempFilePath(),
+            ['Data' => XlsxFixtureFactory::worksheet([['a']])],
+            [StylesStore::STYLES_ENTRY => str_repeat('x', 512)],
+        );
+
+        $this->expectException(AppenderSizeLimitException::class);
+        $this->expectExceptionMessage('max_sheet_xml_size');
+
+        $this->inspector($path)->readStyles(100);
+    }
+
+    public function testReadStylesRejectsAnUnreadablePart(): void
+    {
+        $path = XlsxFixtureFactory::create(
+            $this->tempFilePath(),
+            ['Data' => XlsxFixtureFactory::worksheet([['a']])],
+            [StylesStore::STYLES_ENTRY => '<styleSheet/>'],
+        );
+        $zip = new FailingZip();
+        self::assertTrue($zip->open($path));
+        $zip->failReads = true;
+
+        try {
+            (new WorkbookInspector($path, $zip))->readStyles(\PHP_INT_MAX);
+            self::fail('Expected InvalidWorkbookException.');
+        } catch (InvalidWorkbookException $exception) {
+            self::assertStringContainsString('styles', $exception->getMessage());
         } finally {
             $zip->close();
         }

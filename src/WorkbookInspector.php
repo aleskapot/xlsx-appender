@@ -176,6 +176,46 @@ final class WorkbookInspector
     }
 
     /**
+     * Reads the styles part of the archive, enforcing the configured size
+     * limit (§3.4 of the specification).
+     *
+     *
+     * @throws AppenderSizeLimitException when the part is larger than $maxBytes
+     * @throws InvalidWorkbookException when the part cannot be read
+     *
+     * @return string|null null when the workbook has no xl/styles.xml yet
+     */
+    public function readStyles(int $maxBytes): ?string
+    {
+        $stat = $this->zip->statName(StylesStore::STYLES_ENTRY);
+
+        if ($stat === false) {
+            return null;
+        }
+
+        if ($stat['size'] > $maxBytes) {
+            throw new AppenderSizeLimitException(\sprintf(
+                'Styles "%s" are %d bytes, which exceeds max_sheet_xml_size of %d bytes.',
+                StylesStore::STYLES_ENTRY,
+                $stat['size'],
+                $maxBytes,
+            ));
+        }
+
+        $xml = $this->zip->getFromName(StylesStore::STYLES_ENTRY);
+
+        if ($xml === false) {
+            throw new InvalidWorkbookException(\sprintf(
+                'Unable to read styles part "%s" from "%s".',
+                StylesStore::STYLES_ENTRY,
+                $this->path,
+            ));
+        }
+
+        return $xml;
+    }
+
+    /**
      * Parses workbook.xml and workbook.xml.rels into name => zip entry path.
      *
      * @return array<string, string>

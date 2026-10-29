@@ -20,6 +20,7 @@ use XlsxFastAppender\Exception\UnsupportedValueException;
 use XlsxFastAppender\Exception\WriteFailedException;
 use XlsxFastAppender\SharedStringsStore;
 use XlsxFastAppender\StringMode;
+use XlsxFastAppender\StylesStore;
 use XlsxFastAppender\Tests\Support\FailingZip;
 use XlsxFastAppender\Tests\Support\TestCase;
 use XlsxFastAppender\Tests\Support\XlsxFixtureFactory;
@@ -980,6 +981,10 @@ final class XlsxAppenderTest extends TestCase
         yield 'columns not an array' => [['columns' => 'name'], 'Option "columns"'];
         yield 'write_header not a bool' => [['write_header' => 'true'], 'Option "write_header"'];
         yield 'strict_columns not a bool' => [['strict_columns' => 'no'], 'Option "strict_columns"'];
+        yield 'date_format not a string' => [['date_format' => 123], 'Option "date_format"'];
+        yield 'date_format empty' => [['date_format' => ''], 'Option "date_format"'];
+        yield 'date_format whitespace only' => [['date_format' => '   '], 'Option "date_format"'];
+        yield 'date_format control character' => [['date_format' => "DD\x01MM"], 'Option "date_format"'];
     }
 
     public function testMalformedStartCellIsRejected(): void
@@ -1283,6 +1288,177 @@ final class XlsxAppenderTest extends TestCase
             self::assertStringContainsString('4 GB', $exception->getMessage());
             self::assertStringContainsString('(C20)', $exception->getMessage());
         }
+    }
+
+    public function testDateFormatCreatesStylesPartAndRegistrations(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+
+        $written = (new XlsxAppender($path, ['date_format' => 'DD.MM.YYYY']))->append([
+            ['2026-10-29'],
+            [new \DateTimeImmutable('2026-10-29 12:00:00')],
+            ['29.10.2026'],
+            ['not a date'],
+            [42],
+        ]);
+
+        self::assertSame(5, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertStringContainsString('<c r="A1" s="1"><v>46324</v></c>', $sheet);
+        self::assertStringContainsString('<c r="A2" s="1"><v>46324.5</v></c>', $sheet);
+        self::assertStringContainsString('<c r="A3" s="1"><v>46324</v></c>', $sheet);
+        self::assertStringContainsString('<c r="A4" t="inlineStr"><is><t>not a date</t></is></c>', $sheet);
+        self::assertStringContainsString('<c r="A5"><v>42</v></c>', $sheet);
+
+        $styles = $this->readEntry($path, StylesStore::STYLES_ENTRY);
+        self::assertStringContainsString('<numFmt numFmtId="164" formatCode="DD.MM.YYYY"/>', $styles);
+        self::assertStringContainsString('<cellXfs count="2">', $styles);
+        self::assertStringContainsString(
+            '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+            $styles,
+        );
+
+        $contentTypes = $this->readEntry($path, StylesStore::CONTENT_TYPES_ENTRY);
+        self::assertStringContainsString('<Override PartName="/xl/styles.xml"', $contentTypes);
+
+        $relationships = $this->readEntry($path, StylesStore::RELATIONSHIPS_ENTRY);
+        self::assertStringContainsString('Id="rId2"', $relationships);
+        self::assertStringContainsString('/relationships/styles', $relationships);
+        self::assertStringContainsString('Target="styles.xml"', $relationships);
+
+        $spreadsheet = \PhpOffice\PhpSpreadsheet\IOFactory::load($path);
+
+        try {
+            $loaded = $spreadsheet->getActiveSheet();
+            self::assertSame('29.10.2026', $loaded->getCell('A1')->getFormattedValue());
+            self::assertSame('29.10.2026', $loaded->getCell('A2')->getFormattedValue());
+            self::assertSame('29.10.2026', $loaded->getCell('A3')->getFormattedValue());
+            self::assertSame('not a date', $loaded->getCell('A4')->getFormattedValue());
+            self::assertSame('42', $loaded->getCell('A5')->getFormattedValue());
+        } finally {
+            $spreadsheet->disconnectWorksheets();
+        }
+
+        self::assertFileDoesNotExist($path.'.tmp.styles');
+    }
+
+    public function testDateFormatPatchesAnExistingStylesPart(): void
+    {
+        $existing = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            .'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            .'<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
+            .'<fills count="2"><fill><patternFill patternType="none"/></fill>'
+            .'<fill><patternFill patternType="gray125"/></fill></fills>'
+            .'<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+            .'<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+            .'<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+            .'</styleSheet>';
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()], [
+            StylesStore::STYLES_ENTRY => $existing,
+        ]);
+
+        $written = (new XlsxAppender($path, ['date_format' => 'DD.MM.YYYY']))->append([['2026-10-29']]);
+
+        self::assertSame(1, $written);
+
+        $styles = $this->readEntry($path, StylesStore::STYLES_ENTRY);
+        self::assertStringContainsString(
+            '<numFmts count="1"><numFmt numFmtId="164" formatCode="DD.MM.YYYY"/></numFmts><fonts',
+            $styles,
+        );
+        self::assertStringContainsString('<cellXfs count="2">', $styles);
+        self::assertStringContainsString(
+            '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>',
+            $styles,
+        );
+        self::assertStringContainsString('<name val="Calibri"/>', $styles);
+        self::assertStringContainsString('<cellStyleXfs count="1">', $styles);
+
+        self::assertStringContainsString(
+            '<c r="A1" s="1"><v>46324</v></c>',
+            $this->readEntry($path, self::SHEET_ENTRY),
+        );
+        self::assertFileDoesNotExist($path.'.tmp.styles');
+    }
+
+    public function testDateFormatKeepsDatesOutOfSharedStrings(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A2',
+            'mode' => 'shared_strings',
+            'date_format' => 'DD.MM.YYYY',
+        ]))->append([['hello'], ['2026-10-29'], ['hello']]);
+
+        self::assertSame(3, $written);
+
+        $sst = $this->readEntry($path, SharedStringsStore::SST_ENTRY);
+        self::assertStringContainsString('uniqueCount="1"', $sst);
+        self::assertStringContainsString('<si><t>hello</t></si>', $sst);
+        self::assertStringNotContainsString('46324', $sst);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertStringContainsString('<c r="A2" t="s"><v>0</v></c>', $sheet);
+        self::assertStringContainsString('<c r="A3" s="1"><v>46324</v></c>', $sheet);
+        self::assertStringContainsString('<c r="A4" t="s"><v>0</v></c>', $sheet);
+    }
+
+    public function testDateFormatWithEmptyBatchLeavesFileByteIdentical(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+        $before = file_get_contents($path);
+
+        $written = (new XlsxAppender($path, ['date_format' => 'DD.MM.YYYY']))->append([]);
+
+        self::assertSame(0, $written);
+        self::assertSame($before, file_get_contents($path));
+        self::assertFileDoesNotExist($path.'.tmp.styles');
+    }
+
+    public function testDateBeforeExcelEpochLeavesFileUnchanged(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+        $before = file_get_contents($path);
+
+        try {
+            (new XlsxAppender($path, ['date_format' => 'DD.MM.YYYY']))
+                ->append([['ok'], [new \DateTimeImmutable('1899-12-31')]]);
+            self::fail('Expected UnsupportedValueException.');
+        } catch (UnsupportedValueException $exception) {
+            self::assertStringContainsString('before 1900-01-01', $exception->getMessage());
+        }
+
+        self::assertSame($before, file_get_contents($path));
+        self::assertFileDoesNotExist($path.'.tmp.styles');
+    }
+
+    public function testStylesWriteFailureRaisesWriteFailedAndLeavesFileUnchanged(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+        $before = file_get_contents($path);
+
+        $appender = new XlsxAppender(
+            $path,
+            ['date_format' => 'DD.MM.YYYY'],
+            static function (): FailingZip {
+                $zip = new FailingZip();
+                $zip->failAddFileEntry = StylesStore::STYLES_ENTRY;
+
+                return $zip;
+            },
+        );
+
+        try {
+            $appender->append([['2026-10-29']]);
+            self::fail('Expected WriteFailedException.');
+        } catch (WriteFailedException $exception) {
+            self::assertStringContainsString('styles part', $exception->getMessage());
+        }
+
+        self::assertSame($before, file_get_contents($path));
+        self::assertFileDoesNotExist($path.'.tmp.styles');
     }
 
     /**

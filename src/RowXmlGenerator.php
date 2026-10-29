@@ -11,6 +11,10 @@ use XlsxFastAppender\Exception\UnsupportedValueException;
  * Serializes one row of PHP values into a `<row>` XML fragment using
  * inline-string cells (§2.3 of the specification).
  *
+ * When a date style index is attached (date_format option, §3.4), strings in
+ * a recognized date shape and DateTimeInterface values become serial-number
+ * cells carrying that style; everything else follows the numeric/text rules.
+ *
  * Values are validated before any XML is produced, so a rejected row never
  * reaches the output stream: the exception carries the cell address (C9).
  */
@@ -19,12 +23,13 @@ final class RowXmlGenerator
     /**
      * Characters that XML 1.0 forbids anywhere in a document.
      */
-    private const INVALID_XML_CHARS = '/^[^\x{0000}-\x{0008}\x{000B}\x{000C}\x{000E}-\x{001F}\x{FFFE}\x{FFFF}]*$/u';
+    public const INVALID_XML_CHARS = '/^[^\x{0000}-\x{0008}\x{000B}\x{000C}\x{000E}-\x{001F}\x{FFFE}\x{FFFF}]*$/u';
 
     public function __construct(
         private readonly int $startColumn,
         private readonly bool $skipNulls,
         private readonly ?SharedStringsStore $strings = null,
+        private readonly ?int $dateStyle = null,
     ) {
     }
 
@@ -98,12 +103,27 @@ final class RowXmlGenerator
      * Validates one cell value and returns it with its narrowed type so the
      * emission step does not have to deal with mixed.
      */
-    private function representableValue(int $rowNumber, int $offset, mixed $value): int|float|string|bool|null
+    private function representableValue(int $rowNumber, int $offset, mixed $value): int|float|string|bool|null|DateCell
     {
         $column = $this->startColumn + $offset;
+        $dateStyle = $this->dateStyle;
 
         if ($value === null) {
             return null;
+        }
+
+        if ($dateStyle !== null) {
+            if ($value instanceof \DateTimeInterface) {
+                return new DateCell(ExcelDate::serialOf($value, $column, $rowNumber), $dateStyle);
+            }
+
+            if (\is_string($value)) {
+                $parsed = ExcelDate::tryParse($value);
+
+                if ($parsed !== null) {
+                    return new DateCell(ExcelDate::serialOf($parsed, $column, $rowNumber), $dateStyle);
+                }
+            }
         }
 
         if (\is_string($value)) {
@@ -164,13 +184,25 @@ final class RowXmlGenerator
         }
     }
 
-    private function writeCell(\XMLWriter $writer, int $rowNumber, int $offset, int|float|string|bool|null $value): void
+    private function writeCell(\XMLWriter $writer, int $rowNumber, int $offset, int|float|string|bool|null|DateCell $value): void
     {
         $reference = ColumnName::of($this->startColumn + $offset).$rowNumber;
 
         if ($value === null) {
             $writer->startElement('c');
             $writer->writeAttribute('r', $reference);
+            $writer->endElement();
+
+            return;
+        }
+
+        if ($value instanceof DateCell) {
+            $writer->startElement('c');
+            $writer->writeAttribute('r', $reference);
+            $writer->writeAttribute('s', (string) $value->style);
+            $writer->startElement('v');
+            $writer->text(\is_int($value->serial) ? (string) $value->serial : self::floatToPlainDecimal($value->serial));
+            $writer->endElement();
             $writer->endElement();
 
             return;

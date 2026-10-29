@@ -1,4 +1,4 @@
-# Coverage matrix: corner cases C1–C29 → tests
+# Coverage matrix: corner cases C1–C30 → tests
 
 Status legend: **done** — automated test exists and passes; **partial** — one side covered,
 the other arrives with the stage noted; **planned** — not yet implemented (stage per spec §5).
@@ -39,6 +39,7 @@ docs/CI release.
 | C27 | Cyrillic labels in header, UTF-8, reopen in Excel/LO/GS | done (automated) | header emission through `Unit/SheetSplicerTest::testWritesHeaderRowBeforeData` + header integration tests (UTF-8 bytes asserted); Excel/LO/GS reopen → pre-release manual |
 | C28 | `conflict_mode='clear'` — rows from `start_cell` to the end of the sheet are dropped before the write | done | `Integration/XlsxAppenderTest::testConflictModeClearRemovesRowsFromStartRowToTheEnd` (rows 1..5 → 1,2 + new 3,4, dimension `A1:A4`), `::testConflictModeClearBelowExistingDataActsLikeAppend` (nothing to drop), `::testConflictModeClearWithNoRecordsLeavesFileByteIdentical` (empty batch no-op), enum form `::testConflictModeEnumBehavesLikeItsStringValue`; rewrite plumbing `Unit/SheetSplicerTest::testClearModeDropsExistingRowsFromStartRowToTheEnd`, `testConflictModeRejectsPrefixWithoutOpeningSheetDataTag`; partitioning `Unit/SheetRowPartitionerTest`; option validation in `invalidOptionProvider` (`conflict_mode`) |
 | C29 | `conflict_mode='overwrite'` — only the rows covered by the batch are replaced, rows above/below survive | done | `Integration/XlsxAppenderTest::testConflictModeOverwriteReplacesCoveredRowsAndKeepsTheRest`, `::testConflictModeOverwriteExtendsPastExistingData`, `::testConflictModeOverwriteInsideARowGapKeepsLaterRows` (gap start now legal, ascending `r` order asserted); `Unit/SheetSplicerTest::testOverwriteModeReplacesCoveredRowsAndKeepsTheRest`; partitioning `Unit/SheetRowPartitionerTest` |
+| C30 | `date_format` — date-like values become styled 1900-system serial cells | done | parse/serial: `Unit/ExcelDateTest` (shape provider incl. rejects `2020-02-31`/`1900-02-29`/no-seconds, serial values 1/59/61/45213/46324/46324.5/2958465, pre-1900/after-9999 throws with cell address, mutable `DateTime` not mutated); store: `Unit/StylesStoreTest` (fresh minimal styleSheet, numFmts before `<fonts>`, count refresh, numFmt/xf reuse, self-closed `numFmts`/`cellXfs` expansion, unclosed open tag rejected, numFmt without `formatCode` skipped, non-default-font and `applyNumberFormat="0"` xf not reused, escaping round-trip, malformed-part rejects, CT/rels patches added once); part read: `Integration/WorkbookInspectorTest::testReadStylesReturnsNullWhenThePartIsMissing`, `::testReadStylesReturnsTheExistingPart`, `::testReadStylesEnforcesTheSizeLimit`, `::testReadStylesRejectsAnUnreadablePart`; emission: `Unit/RowXmlGeneratorTest` (date cells `s="N"` + serial, unrecognized strings stay text, `DateTimeInterface` without style still throws, dates bypass the shared-strings store); end-to-end `Integration/XlsxAppenderTest::testDateFormatCreatesStylesPartAndRegistrations` (fresh styles part + CT/rels, PhpSpreadsheet formatted-value round-trip), `::testDateFormatPatchesAnExistingStylesPart` (byte-preserving splice), `::testDateFormatKeepsDatesOutOfSharedStrings`, `::testDateFormatWithEmptyBatchLeavesFileByteIdentical`, `::testDateBeforeExcelEpochLeavesFileUnchanged`, `::testStylesWriteFailureRaisesWriteFailedAndLeavesFileUnchanged` (selective `failAddFileEntry`); option validation in `invalidOptionProvider` (`date_format` int/empty/whitespace/control char) |
 
 ## Structural test inventory
 
@@ -48,14 +49,16 @@ docs/CI release.
 - `Unit/SheetNotFoundExceptionTest` — message and `availableSheets` (C5).
 - `Unit/OptionEnumsTest` — `ConflictMode`/`StringMode` backed values match the
   `conflict_mode`/`mode` string option values (enum option form).
-- `Unit/RowXmlGeneratorTest` — cell emission, value validation, float/string encoding (C8, C9, C15, C16, C26).
+- `Unit/RowXmlGeneratorTest` — cell emission, value validation, float/string encoding (C8, C9, C15, C16, C26); date-cell emission when `date_format` is on (C30 primitives); declares `DateCell`.
+- `Unit/ExcelDateTest` — string shape parsing (accept/reject provider), serial conversion incl. the 1900 leap-day epoch, range throws with cell address, input `DateTime` immutability (C30); declares `ExcelDate`.
+- `Unit/StylesStoreTest` — numFmt/xf resolution and reuse, fresh minimal styleSheet, self-closed element expansion, byte-preserving splice, CT/rel patches, malformed-part rejects (C30); declares `StylesStore`.
 - `Unit/ColumnMapperTest` — `columns` forms, recordMap, strict mode, object records (C24, C25).
 - `Unit/SheetSplicerTest` — row insertion, header rows, dimension merge, temp-file lifecycle, verify(), clear/overwrite rewrite plumbing (C1, C13, C14 write side, C28, C29).
 - `Unit/SheetRowPartitionerTest` — row bucketing for the rewrite: clear/overwrite ranges, missing `r`, self-closed rows, whitespace, missing `</row>` (C28, C29).
 - `Unit/SharedStringsStoreTest` — sst parse/dedup/index allocation, count refresh, self-closed part, CT/rel registrations, malformed parts (C6, C7); declares `SharedStringsStore`.
-- `Integration/WorkbookInspectorTest` — workbook resolution, quirks, invalid files (C4, C5, C11, C14, C17), `readSharedStrings()` size limit/read failures; declares `SheetDataScanner`.
+- `Integration/WorkbookInspectorTest` — workbook resolution, quirks, invalid files (C4, C5, C11, C14, C17), `readSharedStrings()`/`readStyles()` size limit/read failures (C6, C7, C30); declares `SheetDataScanner`.
 - `Integration/WorkbookSheetCreatorTest` — new worksheet part naming, `sheetId`/`rId` allocation, workbook/relationship/content-type registration, missing relationship namespace, malformed workbooks (C5 extension).
-- `Integration/XlsxAppenderTest` — end-to-end append contract: conflicts, header modes, validation order, atomicity (C1–C3, C8–C11, C13, C15–C16, C19, C21–C29); `shared_strings` mode wiring (C6, C7); sidecar locking lifecycle and `use_lock=false` (C12); >4 GB fast-fail (C20).
+- `Integration/XlsxAppenderTest` — end-to-end append contract: conflicts, header modes, validation order, atomicity (C1–C3, C8–C11, C13, C15–C16, C19, C21–C29); `shared_strings` mode wiring (C6, C7); `date_format` wiring — styles part creation/patch, registrations, shared-strings isolation, atomicity (C30); sidecar locking lifecycle and `use_lock=false` (C12); >4 GB fast-fail (C20).
 - `Laravel/ServiceProviderTest` — config defaults per spec §3.3, non-singleton container bindings, `path`/`options` parameter validation, config narrowing (non-array and integer-keyed configs), `vendor:publish --tag=xlsx-appender` path registration; declares `XlsxFastAppenderServiceProvider`.
 - `Laravel/FacadeTest` — facade `append()`/`make()`, per-call overrides (`sheet`, `start_cell`), Eloquent collection mapped by `getAttribute`, `LazyCollection` streaming, chunked batch appends (stage-5 exit criteria); exercises `AppenderFactory`.
 - `Support/InteractsWithTempFiles` — temp-file/ZipArchive lifecycle trait shared by the PHPUnit `TestCase` and the Testbench `LaravelTestCase`.
@@ -64,13 +67,18 @@ docs/CI release.
 
 ## Known intentionally-uncovered statements
 
-Sixteen defensive statements stay uncovered — each is a system-failure branch whose
+A small set of defensive statements stays uncovered — each is a system-failure branch whose
 preconditions are checked earlier or unobservable from userland:
 
 - `RowXmlGenerator::floatToPlainDecimal()` — `json_encode() === false` for a float (never happens
   on PHP 8.3) and the plain-decimal split branch for mid-range *positive* exponents (PHP's
   `json_encode()` only emits `e+N` for magnitudes where that branch is arithmetically unreachable;
   verified by probe).
+- `ExcelDate::tryParse()` — the round-trip `format() !== $value` guard after `getLastErrors()`:
+  for the five fixed digit-shape patterns a value that parses without warnings/errors always
+  re-formats to itself; the guard defends against future pattern changes.
+- `StylesStore::elementBody()` — the `return ''` fallback when the freshly-inserted element
+  cannot be re-parsed (insertIntoElement() guarantees the well-formed form first).
 - `SheetDataScanner` — the empty `private` constructor of a static utility class (never instantiated).
 - `SheetRowPartitioner` — the same empty `private` constructor of a static utility class.
 - `SheetSplicer` — `fopen()`/`fwrite()`/`fread()` failure throws; the unwritable-directory case is

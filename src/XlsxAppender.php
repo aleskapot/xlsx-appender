@@ -41,6 +41,7 @@ final class XlsxAppender
         'columns',
         'write_header',
         'strict_columns',
+        'date_format',
     ];
 
     private const DEFAULT_MAX_SHEET_XML_SIZE = 268435456;
@@ -75,6 +76,8 @@ final class XlsxAppender
     private readonly bool $writeHeader;
 
     private readonly bool $strictColumns;
+
+    private readonly ?string $dateFormat;
 
     private readonly StringMode $mode;
 
@@ -227,6 +230,33 @@ final class XlsxAppender
 
         $this->strictColumns = $strictColumns;
 
+        $dateFormat = $options['date_format'] ?? null;
+
+        if ($dateFormat !== null) {
+            if (!\is_string($dateFormat)) {
+                throw new InvalidOptionException(\sprintf(
+                    'Option "date_format" must be a string or null, got %s.',
+                    get_debug_type($dateFormat),
+                ));
+            }
+
+            if (trim($dateFormat) === '') {
+                throw new InvalidOptionException(
+                    'Option "date_format" must be an Excel number-format code such as "DD.MM.YYYY", '
+                    .'or null to keep writing dates as text.',
+                );
+            }
+
+            if (preg_match(RowXmlGenerator::INVALID_XML_CHARS, $dateFormat) !== 1) {
+                throw new InvalidOptionException(
+                    'Option "date_format" contains characters that are not allowed in XML documents '
+                    .'(control characters other than tab, newline or carriage return).',
+                );
+            }
+        }
+
+        $this->dateFormat = $dateFormat;
+
         $this->mapper = new ColumnMapper($columns, $strictColumns, null);
     }
 
@@ -343,12 +373,22 @@ final class XlsxAppender
             }
 
             $store = $this->loadSharedStrings($inspector);
+            $styles = null;
+            $dateStyle = null;
+
+            if ($this->dateFormat !== null) {
+                $stylesXml = $inspector->readStyles($this->maxSheetXmlSize);
+                $styles = $stylesXml === null ? StylesStore::withoutFile() : StylesStore::fromXml($stylesXml);
+                $dateStyle = $styles->dateStyleIndex($this->dateFormat);
+            }
+
             $result = $this->spliceInto(
                 $inspector,
                 $sheetPath,
                 $records,
                 $store,
                 $createdSheet?->worksheetXml,
+                $dateStyle,
             );
 
             if ($result->isEmpty()) {
@@ -377,6 +417,36 @@ final class XlsxAppender
 
                     if (\is_string($relationships)) {
                         $patched = $store->relationshipsXml($relationships);
+
+                        if ($patched !== null) {
+                            $relationships = $patched;
+                            $relationshipsChanged = true;
+                        }
+                    }
+                }
+            }
+
+            if ($styles !== null && $styles->hasChanges()) {
+                $this->addPatchedEntry(
+                    $zip,
+                    $this->tmpPath().'.styles',
+                    $styles->buildStylesXml(),
+                    StylesStore::STYLES_ENTRY,
+                    'styles part',
+                );
+
+                if (!$styles->stylesFileExisted()) {
+                    if (\is_string($contentTypes)) {
+                        $patched = $styles->contentTypesXml($contentTypes);
+
+                        if ($patched !== null) {
+                            $contentTypes = $patched;
+                            $contentTypesChanged = true;
+                        }
+                    }
+
+                    if (\is_string($relationships)) {
+                        $patched = $styles->relationshipsXml($relationships);
 
                         if ($patched !== null) {
                             $relationships = $patched;
@@ -447,6 +517,7 @@ final class XlsxAppender
      * @param iterable<mixed>           $records
      * @param SharedStringsStore|null   $store     shared-strings index for "shared_strings" mode (§3.2)
      * @param string|null               $sheetXml  XML of a sheet created in this run (not readable from the open archive yet)
+     * @param int|null                  $dateStyle cellXfs index for date cells (§3.4), null when date_format is off
      */
     private function spliceInto(
         WorkbookInspector $inspector,
@@ -454,6 +525,7 @@ final class XlsxAppender
         iterable $records,
         ?SharedStringsStore $store,
         ?string $sheetXml = null,
+        ?int $dateStyle = null,
     ): SpliceResult {
         $sheetXml ??= $inspector->readSheetXml($sheetPath, $this->maxSheetXmlSize);
         $scan = $inspector->scan($sheetXml);
@@ -518,7 +590,7 @@ final class XlsxAppender
             ));
         }
 
-        $splicer = new SheetSplicer(new RowXmlGenerator($startColumn, $this->skipNulls, $store));
+        $splicer = new SheetSplicer(new RowXmlGenerator($startColumn, $this->skipNulls, $store, $dateStyle));
 
         return $splicer->splice(
             $sheetXml,
@@ -722,7 +794,7 @@ final class XlsxAppender
 
     private function cleanupTempFiles(): void
     {
-        foreach (['', '.rows', '.sst', '.ct', '.rels'] as $suffix) {
+        foreach (['', '.rows', '.sst', '.ct', '.rels', '.styles'] as $suffix) {
             $path = $this->tmpPath().$suffix;
 
             if (is_file($path)) {
