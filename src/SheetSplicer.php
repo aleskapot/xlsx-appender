@@ -44,6 +44,7 @@ final class SheetSplicer
      *
      * @throws InvalidWorkbookException when the sheet XML has no `</sheetData>` (C14)
      * @throws WriteFailedException     when a temp file cannot be written (C13)
+     * @throws \Throwable
      */
     public function splice(
         string $sheetXml,
@@ -163,7 +164,7 @@ final class SheetSplicer
         try {
             if ($headerLabels !== null) {
                 $headerRow = $startRow - 1;
-                $headerXml = $this->generator->rowXml($headerRow, $headerLabels);
+                $headerXml = $this->generator->rowXml($headerRow, $headerLabels, false);
 
                 $this->writeChunk($handle, $headerXml, $rowsPath);
                 $headerWritten = true;

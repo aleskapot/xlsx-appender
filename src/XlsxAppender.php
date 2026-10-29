@@ -42,6 +42,7 @@ final class XlsxAppender
         'write_header',
         'strict_columns',
         'date_format',
+        'numeric_strings',
     ];
 
     private const DEFAULT_MAX_SHEET_XML_SIZE = 268435456;
@@ -78,6 +79,8 @@ final class XlsxAppender
     private readonly bool $strictColumns;
 
     private readonly ?string $dateFormat;
+
+    private readonly bool $numericStrings;
 
     private readonly StringMode $mode;
 
@@ -256,6 +259,17 @@ final class XlsxAppender
         }
 
         $this->dateFormat = $dateFormat;
+
+        $numericStrings = $options['numeric_strings'] ?? true;
+
+        if (!\is_bool($numericStrings)) {
+            throw new InvalidOptionException(\sprintf(
+                'Option "numeric_strings" must be a bool, got %s.',
+                get_debug_type($numericStrings),
+            ));
+        }
+
+        $this->numericStrings = $numericStrings;
 
         $this->mapper = new ColumnMapper($columns, $strictColumns, null);
     }
@@ -590,7 +604,7 @@ final class XlsxAppender
             ));
         }
 
-        $splicer = new SheetSplicer(new RowXmlGenerator($startColumn, $this->skipNulls, $store, $dateStyle));
+        $splicer = new SheetSplicer(new RowXmlGenerator($startColumn, $this->skipNulls, $store, $dateStyle, $this->numericStrings));
 
         return $splicer->splice(
             $sheetXml,

@@ -985,6 +985,7 @@ final class XlsxAppenderTest extends TestCase
         yield 'date_format empty' => [['date_format' => ''], 'Option "date_format"'];
         yield 'date_format whitespace only' => [['date_format' => '   '], 'Option "date_format"'];
         yield 'date_format control character' => [['date_format' => "DD\x01MM"], 'Option "date_format"'];
+        yield 'numeric_strings not a bool' => [['numeric_strings' => 'yes'], 'Option "numeric_strings"'];
     }
 
     public function testMalformedStartCellIsRejected(): void
@@ -1459,6 +1460,96 @@ final class XlsxAppenderTest extends TestCase
 
         self::assertSame($before, file_get_contents($path));
         self::assertFileDoesNotExist($path.'.tmp.styles');
+    }
+
+    public function testNumericStringsOptionConvertsDatabaseStringsToNumbers(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+
+        $written = (new XlsxAppender($path, ['start_cell' => 'A2']))
+            ->append([['0', '.7', '42', '007', ' 7 ']]);
+
+        self::assertSame(1, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertStringContainsString('<c r="A2"><v>0</v></c>', $sheet);
+        self::assertStringContainsString('<c r="B2"><v>0.7</v></c>', $sheet);
+        self::assertStringContainsString('<c r="C2"><v>42</v></c>', $sheet);
+        self::assertStringContainsString('<c r="D2" t="inlineStr"><is><t>007</t></is></c>', $sheet);
+        self::assertStringContainsString('<c r="E2" t="inlineStr"><is><t xml:space="preserve"> 7 </t></is></c>', $sheet);
+    }
+
+    public function testNumericStringsOptionOffKeepsDatabaseStringsAsText(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A2',
+            'numeric_strings' => false,
+        ]))->append([['0', '.7']]);
+
+        self::assertSame(1, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertStringContainsString('<c r="A2" t="inlineStr"><is><t>0</t></is></c>', $sheet);
+        self::assertStringContainsString('<c r="B2" t="inlineStr"><is><t>.7</t></is></c>', $sheet);
+    }
+
+    public function testNumericStringsOptionKeepsHeaderRowAsText(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A2',
+            'columns' => ['year' => '2024', 'amount' => '0'],
+            'write_header' => true,
+            'numeric_strings' => true,
+        ]))->append([['1', '.7']]);
+
+        self::assertSame(1, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertStringContainsString('<c r="A1" t="inlineStr"><is><t>2024</t></is></c>', $sheet);
+        self::assertStringContainsString('<c r="B1" t="inlineStr"><is><t>0</t></is></c>', $sheet);
+        self::assertStringContainsString('<c r="A2"><v>1</v></c>', $sheet);
+        self::assertStringContainsString('<c r="B2"><v>0.7</v></c>', $sheet);
+    }
+
+    public function testNumericStringsOptionKeepsConvertedValuesOutOfSharedStrings(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+
+        $written = (new XlsxAppender($path, [
+            'start_cell' => 'A2',
+            'mode' => 'shared_strings',
+            'numeric_strings' => true,
+        ]))->append([['42', 'x']]);
+
+        self::assertSame(1, $written);
+
+        $sst = $this->readEntry($path, SharedStringsStore::SST_ENTRY);
+        self::assertStringContainsString('uniqueCount="1"', $sst);
+        self::assertStringContainsString('<si><t>x</t></si>', $sst);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+        self::assertStringContainsString('<c r="A2"><v>42</v></c>', $sheet);
+        self::assertStringContainsString('<c r="B2" t="s"><v>0</v></c>', $sheet);
+    }
+
+    public function testNumericStringsOverflowLeavesFileUnchanged(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::emptyWorksheet()]);
+        $before = file_get_contents($path);
+
+        try {
+            (new XlsxAppender($path, ['numeric_strings' => true]))
+                ->append([['ok'], ['1e999']]);
+            self::fail('Expected UnsupportedValueException.');
+        } catch (UnsupportedValueException $exception) {
+            self::assertStringContainsString('INF and NAN', $exception->getMessage());
+        }
+
+        self::assertSame($before, file_get_contents($path));
     }
 
     /**

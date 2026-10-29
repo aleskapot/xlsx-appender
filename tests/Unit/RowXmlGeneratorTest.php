@@ -339,12 +339,149 @@ final class RowXmlGeneratorTest extends TestCase
         $this->generator(2, dateStyle: 1)->rowXml(7, [new \DateTimeImmutable('1899-12-31')]);
     }
 
+    public function testKeepsNumericStringsAsTextWhenOptionIsDisabled(): void
+    {
+        $xml = $this->generator(numericStrings: false)->rowXml(1, ['0', '.7', '42']);
+
+        self::assertSame(
+            '<row r="1">'
+            .'<c r="A1" t="inlineStr"><is><t>0</t></is></c>'
+            .'<c r="B1" t="inlineStr"><is><t>.7</t></is></c>'
+            .'<c r="C1" t="inlineStr"><is><t>42</t></is></c>'
+            .'</row>',
+            $xml,
+        );
+    }
+
+    #[DataProvider('convertibleNumericStringProvider')]
+    public function testConvertsNumericStringsWhenOptionIsEnabled(string $value, string $expectedXml): void
+    {
+        $xml = $this->generator(numericStrings: true)->rowXml(1, [$value]);
+
+        self::assertSame('<row r="1"><c r="A1">'.$expectedXml.'</c></row>', $xml);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function convertibleNumericStringProvider(): iterable
+    {
+        yield 'zero' => ['0', '<v>0</v>'];
+        yield 'negative zero' => ['-0', '<v>0</v>'];
+        yield 'plus sign' => ['+7', '<v>7</v>'];
+        yield 'integer' => ['42', '<v>42</v>'];
+        yield 'leading dot fraction' => ['.7', '<v>0.7</v>'];
+        yield 'negative leading dot' => ['-.7', '<v>-0.7</v>'];
+        yield 'zero integer part' => ['0.7', '<v>0.7</v>'];
+        yield 'trailing dot' => ['5.', '<v>5</v>'];
+        yield 'exponent' => ['1e5', '<v>100000</v>'];
+        yield 'negative exponent' => ['1E-5', '<v>0.000010</v>'];
+        yield 'exponent zero' => ['0e0', '<v>0</v>'];
+        yield 'dot zero' => ['.0', '<v>0</v>'];
+        yield 'php int max' => ['9223372036854775807', '<v>9223372036854775807</v>'];
+        yield 'php int min' => ['-9223372036854775808', '<v>-9223372036854775808</v>'];
+        yield 'above int max becomes float' => ['9223372036854775808', '<v>9223372036854776000</v>'];
+        yield 'below int min becomes float' => ['-9223372036854775809', '<v>-9223372036854776000</v>'];
+        yield 'twenty digits becomes float' => ['12345678901234567890', '<v>12345678901234567000</v>'];
+    }
+
+    #[DataProvider('textualNumericStringProvider')]
+    public function testKeepsAmbiguousNumericStringsAsTextWhenOptionIsEnabled(string $value): void
+    {
+        $xml = $this->generator(numericStrings: true)->rowXml(1, [$value]);
+
+        $dom = new \DOMDocument();
+        self::assertTrue($dom->loadXML('<root>'.$xml.'</root>'));
+
+        $cells = $dom->getElementsByTagName('c');
+        self::assertSame(1, $cells->length);
+        self::assertSame('inlineStr', $cells->item(0)?->getAttribute('t'));
+
+        $texts = $dom->getElementsByTagName('t');
+        self::assertSame(1, $texts->length);
+        self::assertSame($value, $texts->item(0)?->textContent);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function textualNumericStringProvider(): iterable
+    {
+        yield 'leading zero code' => ['007'];
+        yield 'padded octal-like code' => ['0755'];
+        yield 'negative leading zeros' => ['-001'];
+        yield 'double zero' => ['00'];
+        yield 'exponent with leading zeros' => ['00e5'];
+        yield 'leading space' => [' 7'];
+        yield 'trailing space' => ['7 '];
+        yield 'surrounding spaces' => [' 7 '];
+        yield 'underscore literal' => ['1_000'];
+        yield 'hex literal' => ['0x1A'];
+        yield 'decimal comma' => ['1,5'];
+        yield 'INF word' => ['INF'];
+        yield 'letters' => ['abc'];
+        yield 'empty string' => [''];
+    }
+
+    public function testRejectsOverflowingExponentStringWithCellAddress(): void
+    {
+        $this->expectException(UnsupportedValueException::class);
+        $this->expectExceptionMessage('Cell C7: INF and NAN');
+
+        $this->generator(2, numericStrings: true)->rowXml(7, ['x', '1e999']);
+    }
+
+    public function testConvertedNumericStringsDoNotEnterSharedStringsStore(): void
+    {
+        $store = SharedStringsStore::withoutFile();
+
+        $xml = $this->generator(1, true, $store, null, true)->rowXml(1, ['42', 'x', 'x']);
+
+        self::assertSame(
+            '<row r="1">'
+            .'<c r="A1"><v>42</v></c>'
+            .'<c r="B1" t="s"><v>0</v></c>'
+            .'<c r="C1" t="s"><v>0</v></c>'
+            .'</row>',
+            $xml,
+        );
+        self::assertTrue($store->hasNewReferences());
+    }
+
+    public function testDateShapesWinOverNumericStringsWhenBothOptionsAreEnabled(): void
+    {
+        $xml = $this->generator(dateStyle: 2, numericStrings: true)->rowXml(1, ['2026-10-29', '42']);
+
+        self::assertSame(
+            '<row r="1">'
+            .'<c r="A1" s="2"><v>46324</v></c>'
+            .'<c r="B1"><v>42</v></c>'
+            .'</row>',
+            $xml,
+        );
+    }
+
+    public function testHeaderRowKeepsNumericStringsAsText(): void
+    {
+        $xml = $this->generator(numericStrings: true)->rowXml(1, ['2024', '0', '.7'], false);
+
+        self::assertSame(
+            '<row r="1">'
+            .'<c r="A1" t="inlineStr"><is><t>2024</t></is></c>'
+            .'<c r="B1" t="inlineStr"><is><t>0</t></is></c>'
+            .'<c r="C1" t="inlineStr"><is><t>.7</t></is></c>'
+            .'</row>',
+            $xml,
+        );
+    }
+
     private function generator(
         int $startColumn = 1,
         bool $skipNulls = true,
         ?SharedStringsStore $strings = null,
         ?int $dateStyle = null,
+        bool $numericStrings = false,
     ): RowXmlGenerator {
-        return new RowXmlGenerator($startColumn, $skipNulls, $strings, $dateStyle);
+        return new RowXmlGenerator($startColumn, $skipNulls, $strings, $dateStyle, $numericStrings);
     }
 }

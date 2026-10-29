@@ -8,6 +8,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `numeric_strings` option (default `true`): converts string values that are
+  strict plain-decimal literals (`'0'`, `'.7'`, `'1e5'`) into real numeric
+  cells — for databases that return numbers as strings. Values with leading
+  zeros (`'007'`, codes/identifiers), surrounding whitespace or non-plain
+  forms (`'0x1A'`, `'1_000'`, `'1,5'`) deliberately stay text; header labels
+  are never converted; literals overflowing to INF (`'1e999'`) raise
+  `UnsupportedValueException` with the cell address. Set the option to
+  `false` to restore pure text-cell behaviour for every string.
 - `date_format` option: an Excel number-format code (e.g. `'DD.MM.YYYY'`)
   enabling date cells. `DateTimeInterface` values and strings in the exact
   shapes `Y-m-d`, `Y-m-d H:i:s`, `Y-m-d\TH:i:s`, `d.m.Y`, `d.m.Y H:i:s` are

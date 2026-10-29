@@ -79,6 +79,7 @@ need a `start_cell` below existing data:
 | `write_header`            | `bool`                 | `false`               | Write the header row once at `start_cell − 1`; requires `columns` and an empty sheet (C21–C23).                                                                                                                                        |
 | `strict_columns`          | `bool`                 | `false`               | Reject records containing keys outside `columns` (C24).                                                                                                                                                                                |
 | `date_format`             | `string\|null`         | `null`                | Excel number-format code (e.g. `'DD.MM.YYYY'`) enabling date cells; `null` keeps writing everything as text/numbers (C30). See [Date cells](#date-cells).                                                                              |
+| `numeric_strings`         | `bool`                 | `true`                | Convert strict numeric literals arriving as strings (`'0'`, `'.7'`, `'1e5'`) into numeric cells; `false` keeps every string as text. See [Numeric strings](#numeric-strings).                                                          |
 
 Unknown options and type violations throw `InvalidOptionException` at
 construction time.
@@ -191,8 +192,10 @@ into real date cells (C30):
 
 - **Recognized string shapes** (exact match, no fuzzy parsing): `Y-m-d`,
   `Y-m-d H:i:s`, `Y-m-d\TH:i:s`, `d.m.Y`, `d.m.Y H:i:s`. Values that merely
-  look date-ish (`2026-10-29 14:30`, `2026-02-31`, `12345`) stay ordinary
-  text cells — no errors, no coercion.
+  look date-ish (`2026-10-29 14:30`, `2026-02-31`) stay ordinary text cells —
+  no errors, no coercion. A pure digit string like `12345` is not a date
+  shape; with [`numeric_strings`](#numeric-strings) enabled (the default) it
+  becomes a number cell, otherwise text.
 - **`DateTimeInterface` values** are accepted only when `date_format` is set;
   without the option they raise `UnsupportedValueException` as before.
 - The cell stores Excel's 1900-system serial number; the format code is
@@ -206,6 +209,43 @@ into real date cells (C30):
   conversion.
 - In `shared_strings` mode, date cells never enter `xl/sharedStrings.xml`.
 - An empty batch stays a no-op: the file (and any styles part) is untouched.
+
+### Numeric strings
+
+Databases often return numbers as strings (PDO does so by default). Text
+cells would make Excel ignore those values in `SUM`, sort them
+lexicographically (`"10" < "9"`) and group them as text in pivot tables.
+Numeric literals arriving as strings are therefore converted into real
+number cells **by default**:
+
+```php
+(new XlsxAppender('/data/report.xlsx'))->append([
+    ['0', '.7', '42', '1e5'],   // → 0, 0.7, 42, 100000 (number cells)
+    ['007', ' 7 ', '1,5'],      // → stay text (see the rules below)
+]);
+
+// keep every string as text instead:
+(new XlsxAppender('/data/report.xlsx', ['numeric_strings' => false]))->append($rows);
+```
+
+Conversion rules — deliberately stricter than PHP's `is_numeric()`:
+
+- **Accepted shapes**: plain decimal literals only — `[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?`.
+  Integers that fit PHP's `int` range become integer cells, everything else
+  becomes a float cell (shortest round-trip decimal, never scientific
+  notation). A literal that overflows to INF (`'1e999'`) raises
+  `UnsupportedValueException` with the cell address, like a native `INF`.
+- **Leading zeros stay text**: `'007'`, `'0755'`, `'-001'` — such values are
+  almost always codes or identifiers, and converting them would silently drop
+  the zeros. `'0'` and `'0.7'` are still converted.
+- **Surrounding whitespace stays text**: `' 7'`, `'7 '`, `' 7 '`.
+- **Non-plain forms stay text**: `'0x1A'`, `'1_000'`, `'1,5'`, `'INF'`.
+- **Header labels are never converted**: with `write_header`, a column named
+  `'2024'` stays a text cell.
+- When `date_format` is also set, recognized date shapes win first; only
+  strings that are not dates are considered numeric.
+- In `shared_strings` mode, converted numbers never enter
+  `xl/sharedStrings.xml`.
 
 ## Modes
 

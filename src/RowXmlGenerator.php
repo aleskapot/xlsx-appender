@@ -15,6 +15,10 @@ use XlsxFastAppender\Exception\UnsupportedValueException;
  * a recognized date shape and DateTimeInterface values become serial-number
  * cells carrying that style; everything else follows the numeric/text rules.
  *
+ * With the numeric_strings option, strings that are strict plain-decimal
+ * literals ("0", ".7", "1e5") become numeric cells; headers and values with
+ * whitespace or leading zeros stay text.
+ *
  * Values are validated before any XML is produced, so a rejected row never
  * reaches the output stream: the exception carries the cell address (C9).
  */
@@ -25,11 +29,19 @@ final class RowXmlGenerator
      */
     public const INVALID_XML_CHARS = '/^[^\x{0000}-\x{0008}\x{000B}\x{000C}\x{000E}-\x{001F}\x{FFFE}\x{FFFF}]*$/u';
 
+    /**
+     * Strict numeric-literal shape used by the numeric_strings option:
+     * no surrounding whitespace, no hex/underscore/decimal-comma forms
+     * that is_numeric() would also accept.
+     */
+    private const NUMERIC_STRING = '/\A[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\z/';
+
     public function __construct(
         private readonly int $startColumn,
         private readonly bool $skipNulls,
         private readonly ?SharedStringsStore $strings = null,
         private readonly ?int $dateStyle = null,
+        private readonly bool $numericStrings = false,
     ) {
     }
 
@@ -39,12 +51,15 @@ final class RowXmlGenerator
     }
 
     /**
-     * @param list<mixed> $values cell values, positional from $startColumn
+     * @param list<mixed> $values               cell values, positional from $startColumn
+     * @param bool        $allowNumericStrings  when false (header rows), strings that
+     *                                          look numeric stay text even with the
+     *                                          numeric_strings option enabled
      *
      * @throws InvalidCellReferenceException when the row or a column address is outside Excel limits
      * @throws UnsupportedValueException     when a value cannot be stored in a cell
      */
-    public function rowXml(int $rowNumber, array $values): string
+    public function rowXml(int $rowNumber, array $values, bool $allowNumericStrings = true): string
     {
         if ($rowNumber < 1 || $rowNumber > ExcelLimits::MAX_ROWS) {
             throw new InvalidCellReferenceException(\sprintf(
@@ -63,7 +78,7 @@ final class RowXmlGenerator
                 continue;
             }
 
-            $validated[$offset] = $this->representableValue($rowNumber, $offset, $value);
+            $validated[$offset] = $this->representableValue($rowNumber, $offset, $value, $allowNumericStrings);
         }
 
         $writer = new \XMLWriter();
@@ -102,8 +117,12 @@ final class RowXmlGenerator
     /**
      * Validates one cell value and returns it with its narrowed type so the
      * emission step does not have to deal with mixed.
+     *
+     * Value interpretation order for strings: recognized date shape (when a
+     * date style is attached) first, then — with the numeric_strings option —
+     * a strict numeric literal, and finally text.
      */
-    private function representableValue(int $rowNumber, int $offset, mixed $value): int|float|string|bool|null|DateCell
+    private function representableValue(int $rowNumber, int $offset, mixed $value, bool $allowNumericStrings = true): int|float|string|bool|null|DateCell
     {
         $column = $this->startColumn + $offset;
         $dateStyle = $this->dateStyle;
@@ -128,6 +147,14 @@ final class RowXmlGenerator
 
         if (\is_string($value)) {
             $this->assertString($value, $column, $rowNumber);
+
+            if ($this->numericStrings && $allowNumericStrings) {
+                $number = $this->tryParseNumericString($value, $column, $rowNumber);
+
+                if ($number !== null) {
+                    return $number;
+                }
+            }
 
             return $value;
         }
@@ -182,6 +209,59 @@ final class RowXmlGenerator
                 $rowNumber,
             ));
         }
+    }
+
+    /**
+     * Converts a numeric-string cell value (numeric_strings option) to int or
+     * float, or returns null when the string must stay text.
+     *
+     * Strings with surrounding whitespace, with leading zeros in the integer
+     * part ("007", "0755" — typically codes or identifiers), or in a non-
+     * plain-decimal shape are deliberately kept as text. A literal whose
+     * float value overflows ("1e999") is rejected like a native INF float.
+     */
+    private function tryParseNumericString(string $value, int $column, int $rowNumber): int|float|null
+    {
+        if (preg_match(self::NUMERIC_STRING, $value) !== 1) {
+            return null;
+        }
+
+        $unsigned = ltrim($value, '+-');
+        $exponentPosition = stripos($unsigned, 'e');
+        $mantissa = $exponentPosition === false ? $unsigned : substr($unsigned, 0, $exponentPosition);
+        $dotPosition = strpos($mantissa, '.');
+        $integerPart = $dotPosition === false ? $mantissa : substr($mantissa, 0, $dotPosition);
+
+        if (\strlen($integerPart) > 1 && $integerPart[0] === '0') {
+            return null;
+        }
+
+        if ($dotPosition !== false || $exponentPosition !== false) {
+            $number = (float) $value;
+
+            if (!is_finite($number)) {
+                throw new UnsupportedValueException(\sprintf(
+                    'Cell %s%d: INF and NAN cannot be stored in Excel; convert the value before appending.',
+                    ColumnName::of($column),
+                    $rowNumber,
+                ));
+            }
+
+            return $number;
+        }
+
+        $digits = ltrim($unsigned, '0');
+
+        if ($digits === '') {
+            $digits = '0';
+        }
+
+        $boundary = ($value[0] === '-' ? '9223372036854775808' : '9223372036854775807');
+
+        $fitsInt = \strlen($digits) < \strlen($boundary)
+            || (\strlen($digits) === \strlen($boundary) && strcmp($digits, $boundary) <= 0);
+
+        return $fitsInt ? (int) $value : (float) $value;
     }
 
     private function writeCell(\XMLWriter $writer, int $rowNumber, int $offset, int|float|string|bool|null|DateCell $value): void

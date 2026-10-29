@@ -11,6 +11,11 @@ declare(strict_types=1);
  * `date_format` is an Excel number-format code (e.g. 'DD.MM.YYYY'); null
  * keeps every value as-is (strings stay text, DateTime values are rejected).
  *
+ * `numeric_strings` converts strict numeric literals arriving as strings
+ * ("0", ".7", "1e5") into numeric cells; false keeps every string as text.
+ * Values with surrounding whitespace or leading zeros ("007") stay text,
+ * and header labels are never converted. Enabled by default.
+ *
  * Publish with: php artisan vendor:publish --tag=xlsx-appender
  */
 
@@ -28,4 +33,5 @@ return [
     'write_header' => false,
     'strict_columns' => false,
     'date_format' => null,
+    'numeric_strings' => true,
 ];
