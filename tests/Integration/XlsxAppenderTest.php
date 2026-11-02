@@ -716,6 +716,37 @@ final class XlsxAppenderTest extends TestCase
         self::assertSame($before, file_get_contents($path));
     }
 
+    public function testSanitizeXmlStripsForbiddenCharactersByDefault(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['a']])]);
+
+        $written = (new XlsxAppender($path, ['start_cell' => 'A2']))
+            ->append([["a\x01b"]]);
+
+        self::assertSame(1, $written);
+
+        $sheet = $this->readEntry($path, self::SHEET_ENTRY);
+
+        self::assertStringContainsString('<t>ab</t>', $sheet);
+        self::assertStringNotContainsString("\x01", $sheet);
+    }
+
+    public function testSanitizeXmlDisabledRejectsForbiddenCharactersAndKeepsFileUnchanged(): void
+    {
+        $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['a']])]);
+        $before = file_get_contents($path);
+
+        try {
+            (new XlsxAppender($path, ['start_cell' => 'A2', 'sanitize_xml' => false]))
+                ->append([["a\x01b"]]);
+            self::fail('Expected UnsupportedValueException.');
+        } catch (UnsupportedValueException $exception) {
+            self::assertStringContainsString('not allowed in XML', $exception->getMessage());
+        }
+
+        self::assertSame($before, file_get_contents($path));
+    }
+
     public function testMapCallbackTransformsRecords(): void
     {
         $path = $this->fixture(['Data' => XlsxFixtureFactory::worksheet([['a']])]);
@@ -986,6 +1017,7 @@ final class XlsxAppenderTest extends TestCase
         yield 'date_format whitespace only' => [['date_format' => '   '], 'Option "date_format"'];
         yield 'date_format control character' => [['date_format' => "DD\x01MM"], 'Option "date_format"'];
         yield 'numeric_strings not a bool' => [['numeric_strings' => 'yes'], 'Option "numeric_strings"'];
+        yield 'sanitize_xml not a bool' => [['sanitize_xml' => 'yes'], 'Option "sanitize_xml"'];
     }
 
     public function testMalformedStartCellIsRejected(): void

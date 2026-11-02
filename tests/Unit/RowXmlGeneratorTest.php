@@ -179,7 +179,28 @@ final class RowXmlGeneratorTest extends TestCase
         $this->expectException(UnsupportedValueException::class);
         $this->expectExceptionMessage('not allowed in XML');
 
-        $this->generator()->rowXml(1, [$value]);
+        $this->generator(sanitizeXml: false)->rowXml(1, [$value]);
+    }
+
+    #[DataProvider('forbiddenCharacterProvider')]
+    public function testStripsCharactersForbiddenByXmlByDefault(string $value): void
+    {
+        $xml = $this->generator()->rowXml(1, [$value]);
+
+        $dom = new \DOMDocument();
+        self::assertTrue($dom->loadXML($xml));
+        $texts = $dom->getElementsByTagName('t');
+
+        self::assertSame(1, $texts->length);
+        self::assertSame('ab', $texts->item(0)?->textContent);
+    }
+
+    public function testKeepsForbiddenCharactersWhenSanitizeXmlIsDisabled(): void
+    {
+        $this->expectException(UnsupportedValueException::class);
+        $this->expectExceptionMessage('Cell A1: string contains characters that are not allowed in XML');
+
+        $this->generator(sanitizeXml: false)->rowXml(1, ["a\x00b"]);
     }
 
     /**
@@ -189,7 +210,7 @@ final class RowXmlGeneratorTest extends TestCase
     {
         yield 'null byte' => ["a\x00b"];
         yield 'vertical tab' => ["a\x0Bb"];
-        yield 'form feed' => ["a\x0C b"];
+        yield 'form feed' => ["a\x0Cb"];
         yield 'unit separator' => ["a\x1Fb"];
     }
 
@@ -481,7 +502,8 @@ final class RowXmlGeneratorTest extends TestCase
         ?SharedStringsStore $strings = null,
         ?int $dateStyle = null,
         bool $numericStrings = false,
+        bool $sanitizeXml = true,
     ): RowXmlGenerator {
-        return new RowXmlGenerator($startColumn, $skipNulls, $strings, $dateStyle, $numericStrings);
+        return new RowXmlGenerator($startColumn, $skipNulls, $strings, $dateStyle, $numericStrings, $sanitizeXml);
     }
 }

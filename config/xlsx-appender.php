@@ -16,6 +16,11 @@ declare(strict_types=1);
  * Values with surrounding whitespace or leading zeros ("007") stay text,
  * and header labels are never converted. Enabled by default.
  *
+ * `sanitize_xml` strips characters that XML 1.0 forbids (control characters
+ * other than tab, newline or carriage return) from cell strings; false keeps
+ * the old behaviour and raises UnsupportedValueException instead. Enabled by
+ * default.
+ *
  * Publish with: php artisan vendor:publish --tag=xlsx-appender
  */
 
@@ -34,4 +39,5 @@ return [
     'strict_columns' => false,
     'date_format' => null,
     'numeric_strings' => true,
+    'sanitize_xml' => true,
 ];

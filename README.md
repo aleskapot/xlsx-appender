@@ -80,6 +80,7 @@ need a `start_cell` below existing data:
 | `strict_columns`          | `bool`                 | `false`               | Reject records containing keys outside `columns` (C24).                                                                                                                                                                                |
 | `date_format`             | `string\|null`         | `null`                | Excel number-format code (e.g. `'DD.MM.YYYY'`) enabling date cells; `null` keeps writing everything as text/numbers (C30). See [Date cells](#date-cells).                                                                              |
 | `numeric_strings`         | `bool`                 | `true`                | Convert strict numeric literals arriving as strings (`'0'`, `'.7'`, `'1e5'`) into numeric cells; `false` keeps every string as text. See [Numeric strings](#numeric-strings).                                                          |
+| `sanitize_xml`            | `bool`                 | `true`                | Strip characters XML 1.0 forbids (control characters other than tab, newline or carriage return) from cell strings instead of raising `UnsupportedValueException`; `false` restores the exception.                                     |
 
 Unknown options and type violations throw `InvalidOptionException` at
 construction time.
@@ -390,8 +391,9 @@ files are removed, and the lock is released in `finally`.
 - Worksheet part read into memory: `max_sheet_xml_size` (default 256 MiB, C11).
 - Archive: ≤ 4 GB (zip32) in v1; larger files fail fast with
   `UnsupportedArchiveException` instead of corrupting the zip (C20).
-- Characters forbidden in XML (`\x00`, `\x01`, …) are rejected with the cell
-  address in the message.
+- Characters forbidden in XML (`\x00`, `\x01`, …) are stripped by default
+  (`sanitize_xml=true`); with `sanitize_xml=false` they are rejected with the
+  cell address in the message.
 - Date cells (`date_format`): 1900-01-01 … 9999-12-31; values outside raise
   `UnsupportedValueException`.
 

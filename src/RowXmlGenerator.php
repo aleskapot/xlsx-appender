@@ -19,6 +19,10 @@ use XlsxFastAppender\Exception\UnsupportedValueException;
  * literals ("0", ".7", "1e5") become numeric cells; headers and values with
  * whitespace or leading zeros stay text.
  *
+ * With the sanitize_xml option (default), characters that XML 1.0 forbids are
+ * stripped from cell strings instead of rejecting the row; disabling it makes
+ * such strings raise UnsupportedValueException.
+ *
  * Values are validated before any XML is produced, so a rejected row never
  * reaches the output stream: the exception carries the cell address (C9).
  */
@@ -28,6 +32,11 @@ final class RowXmlGenerator
      * Characters that XML 1.0 forbids anywhere in a document.
      */
     public const INVALID_XML_CHARS = '/^[^\x{0000}-\x{0008}\x{000B}\x{000C}\x{000E}-\x{001F}\x{FFFE}\x{FFFF}]*$/u';
+
+    /**
+     * Same forbidden set as INVALID_XML_CHARS, as a match for stripping them.
+     */
+    private const INVALID_XML_CHARS_MATCH = '/[\x{0000}-\x{0008}\x{000B}\x{000C}\x{000E}-\x{001F}\x{FFFE}\x{FFFF}]/u';
 
     /**
      * Strict numeric-literal shape used by the numeric_strings option:
@@ -42,6 +51,7 @@ final class RowXmlGenerator
         private readonly ?SharedStringsStore $strings = null,
         private readonly ?int $dateStyle = null,
         private readonly bool $numericStrings = false,
+        private readonly bool $sanitizeXml = true,
     ) {
     }
 
@@ -146,7 +156,7 @@ final class RowXmlGenerator
         }
 
         if (\is_string($value)) {
-            $this->assertString($value, $column, $rowNumber);
+            $value = $this->sanitizeString($value, $column, $rowNumber);
 
             if ($this->numericStrings && $allowNumericStrings) {
                 $number = $this->tryParseNumericString($value, $column, $rowNumber);
@@ -187,7 +197,7 @@ final class RowXmlGenerator
         ));
     }
 
-    private function assertString(string $value, int $column, int $rowNumber): void
+    private function sanitizeString(string $value, int $column, int $rowNumber): string
     {
         $length = mb_strlen($value, 'UTF-8');
 
@@ -201,14 +211,22 @@ final class RowXmlGenerator
             ));
         }
 
-        if (preg_match(self::INVALID_XML_CHARS, $value) !== 1) {
-            throw new UnsupportedValueException(\sprintf(
-                'Cell %s%d: string contains characters that are not allowed in XML documents '
-                .'(control characters other than tab, newline or carriage return).',
-                ColumnName::of($column),
-                $rowNumber,
-            ));
+        $result = preg_match(self::INVALID_XML_CHARS, $value);
+
+        if ($result === 1) {
+            return $value;
         }
+
+        if ($result === 0 && $this->sanitizeXml) {
+            return preg_replace(self::INVALID_XML_CHARS_MATCH, '', $value) ?? $value;
+        }
+
+        throw new UnsupportedValueException(\sprintf(
+            'Cell %s%d: string contains characters that are not allowed in XML documents '
+            .'(control characters other than tab, newline or carriage return).',
+            ColumnName::of($column),
+            $rowNumber,
+        ));
     }
 
     /**

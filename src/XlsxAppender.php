@@ -43,6 +43,7 @@ final class XlsxAppender
         'strict_columns',
         'date_format',
         'numeric_strings',
+        'sanitize_xml',
     ];
 
     private const DEFAULT_MAX_SHEET_XML_SIZE = 268435456;
@@ -81,6 +82,8 @@ final class XlsxAppender
     private readonly ?string $dateFormat;
 
     private readonly bool $numericStrings;
+
+    private readonly bool $sanitizeXml;
 
     private readonly StringMode $mode;
 
@@ -270,6 +273,17 @@ final class XlsxAppender
         }
 
         $this->numericStrings = $numericStrings;
+
+        $sanitizeXml = $options['sanitize_xml'] ?? true;
+
+        if (!\is_bool($sanitizeXml)) {
+            throw new InvalidOptionException(\sprintf(
+                'Option "sanitize_xml" must be a bool, got %s.',
+                get_debug_type($sanitizeXml),
+            ));
+        }
+
+        $this->sanitizeXml = $sanitizeXml;
 
         $this->mapper = new ColumnMapper($columns, $strictColumns, null);
     }
@@ -604,7 +618,7 @@ final class XlsxAppender
             ));
         }
 
-        $splicer = new SheetSplicer(new RowXmlGenerator($startColumn, $this->skipNulls, $store, $dateStyle, $this->numericStrings));
+        $splicer = new SheetSplicer(new RowXmlGenerator($startColumn, $this->skipNulls, $store, $dateStyle, $this->numericStrings, $this->sanitizeXml));
 
         return $splicer->splice(
             $sheetXml,

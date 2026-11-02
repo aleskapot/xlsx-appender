@@ -8,6 +8,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `sanitize_xml` option (default `true`): strips characters that XML 1.0
+  forbids (control characters other than tab, newline or carriage return)
+  from cell strings instead of raising `UnsupportedValueException`. Set it to
+  `false` to restore the previous behaviour. Because the default is `true`,
+  strings that used to be rejected are now written with those characters
+  removed.
 - `numeric_strings` option (default `true`): converts string values that are
   strict plain-decimal literals (`'0'`, `'.7'`, `'1e5'`) into real numeric
   cells — for databases that return numbers as strings. Values with leading
